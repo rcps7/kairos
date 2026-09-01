@@ -1,0 +1,8 @@
+httpx>=0.24
+python-telegram-bot>=20.0
+pyserial>=3.5
+chromadb>=0.4
+beautifulsoup4>=4.12
+yt-dlp>=2023.10.13
+keyring>=24.0
+PySide6>=6.5

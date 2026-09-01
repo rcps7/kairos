@@ -1,0 +1,48 @@
+# ---- Secrets & local config (never commit) ----
+.env
+.env.*
+.kairos/
+config.json
+*.db
+*.sqlite
+*.sqlite3
+chroma/
+
+# ---- User data & custom skills (never commit) ----
+# Custom skills live in <storage_root>/Kairos/Skills. The default storage root
+# (%USERPROFILE%/KairosData) is outside the repo. Ignore any data folder that
+# ends up inside the repo by name, without matching the "kairos" package.
+KairosData/
+
+
+# ---- Virtual env ----
+venv/
+env/
+.venv/
+
+# ---- Python cache ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# ---- Build artifacts ----
+*.zip
+build/
+dist/
+
+# ---- OS junk ----
+Thumbs.db
+.DS_Store
+desktop.ini
+
+# ---- Screenshots / user files ----
+*.jpg
+*.jpeg
+*.png
+*.gif
+
+# ---- IDE ----
+.idea/
+.vscode/
