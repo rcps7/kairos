@@ -51,6 +51,8 @@ Licensed under the **PolyForm Noncommercial License 1.0.0** (free for personal/n
 | Skill system — create, view, edit, run, delete skills | GUI / Telegram |
 | Self-improvement — records errors, reflects, stores lessons | GUI / Telegram |
 | Watchdog with kill switch + heartbeat monitoring | `kill.bat`, GUI, Telegram `/kill` |
+| Voice-to-text (Talk button) + spoken replies + live voice meter | GUI |
+| Animated mood orb (thinking/speaking/success/error) | GUI |
 | CLI + GUI front-ends | `run.bat` / `python -m kairos.main` |
 
 ---
@@ -90,9 +92,15 @@ run.bat
 
 On first launch, a setup dialog asks for:
 
-1. **Telegram Bot Token** — create a bot with [@BotFather](https://t.me/BotFather)
-   and paste the token.
-2. **LLM provider** — provider ID, API URL, API key, and model name.
+1. **Telegram Bot Token** (optional) — create a bot with [@BotFather](https://t.me/BotFather)
+   and paste the token, or click **Skip** to proceed without Telegram.
+2. **LLM provider** (optional) — pick a provider from the dropdown (Moonshot/Kimi,
+   DeepSeek, OpenAI, OpenRouter, Groq, or Custom). The API URL and model name are
+   filled in automatically and are editable. You only need to enter the **API key**.
+   You can also click **Skip LLM** to continue without one.
+
+Skipping either step does not stop the installation — you can add or change them
+later via `Edit → LLM Providers` in the GUI.
 
 These are stored securely:
 - API keys go to the OS keyring (Windows Credential Manager).
@@ -143,6 +151,21 @@ buttons**, and is divided into three panes:
   buttons, and the red **KILL SWITCH** button.
 - **Toolbar** — Search, Learn URL, Download, Skills, Providers, Peripherals,
   Self-Reflect.
+
+### Voice & mood
+
+- **Talk button** (next to Send) — hold/click to talk; your speech is converted to
+  text and sent as a message. A live **voice meter** shows your input level.
+- **Spoken replies** — KAIROS reads its answers aloud (Windows SAPI voice) while also
+  showing the text; the meter animates while it speaks.
+- **Mood orb** (top-right of the console) — an animated indicator that reflects the
+  agent's state:
+  - grey = idle
+  - cyan = listening
+  - orange = thinking
+  - red = deep/prolonged thinking (complex tasks)
+  - green = speaking / task success
+  - red flash = error
 
 ### Menus
 

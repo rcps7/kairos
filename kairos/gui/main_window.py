@@ -1,5 +1,7 @@
 import html
+import math
 import sys
+import time
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                                QHBoxLayout, QTextEdit, QTextBrowser, QLineEdit, QPushButton,
                                QListWidget, QSplitter, QMenuBar, QStatusBar,
@@ -7,8 +9,10 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                                QListWidgetItem, QLabel, QDialogButtonBox,
                                QMessageBox, QToolBar, QGroupBox, QFrame,
                                QGridLayout, QComboBox, QTreeWidget, QTreeWidgetItem)
-from PySide6.QtCore import Qt, Signal, QThread, QSize
+from PySide6.QtCore import Qt, Signal, QThread, QSize, QTimer
 from PySide6.QtGui import QAction, QFont, QColor, QPalette, QIcon, QTextCursor
+
+from kairos.gui.voice_widgets import VoiceWorker, SpeakWorker, VoiceMeter, MoodIndicator
 
 # ---------------------------------------------------------------------------
 # Colour palette (dark theme + fluorescent green accents + grey-white buttons)
@@ -855,9 +859,12 @@ class KairosGUI(QMainWindow):
         title.setStyleSheet(f"color: {GREEN}; font-weight: bold; font-family: 'Consolas', monospace;")
         self.active_llm_label = QLabel("")
         self.active_llm_label.setStyleSheet(f"color: {TEXT_GREY}; font-family: 'Segoe UI', sans-serif;")
+        self.mood = MoodIndicator()
         header.addWidget(title)
         header.addStretch()
         header.addWidget(self.active_llm_label)
+        header.addSpacing(12)
+        header.addWidget(self.mood)
         layout.addLayout(header)
 
         self.chat_display = QTextBrowser()
@@ -866,10 +873,17 @@ class KairosGUI(QMainWindow):
         self.chat_display.setPlaceholderText("Kairos is ready. Type a message below...")
         layout.addWidget(self.chat_display, 1)
 
+        self.voice_meter = VoiceMeter()
+        self.voice_meter.setVisible(False)
+        layout.addWidget(self.voice_meter)
+
         input_row = QHBoxLayout()
         self.chat_input = QLineEdit()
         self.chat_input.setPlaceholderText("Type your instruction here...")
         self.chat_input.returnPressed.connect(self.send_message)
+        self.talk_btn = QPushButton("Talk")
+        self.talk_btn.setCheckable(True)
+        self.talk_btn.clicked.connect(self.toggle_talk)
         self.send_btn = QPushButton("Send")
         self.send_btn.setStyleSheet(
             f"background-color: {GREEN_DIM}; color: {BG_DARK}; font-weight: bold;"
@@ -878,6 +892,7 @@ class KairosGUI(QMainWindow):
         self.clear_btn = QPushButton("Clear")
         self.clear_btn.clicked.connect(self.clear_chat)
         input_row.addWidget(self.chat_input, 1)
+        input_row.addWidget(self.talk_btn)
         input_row.addWidget(self.send_btn)
         input_row.addWidget(self.clear_btn)
         layout.addLayout(input_row)
@@ -1055,15 +1070,124 @@ class KairosGUI(QMainWindow):
         self.chat_display.append(f"<b style='color:#58a6ff'>You:</b> {text}")
         self.chat_input.clear()
         self.chat_display.append(f"<b style='color:{GREEN}'>Kairos:</b> ...")
+        self._set_mood("thinking")
+        self._start_deep_thinking_timer()
         self.worker = LLMWorker(self.engine, text)
         self.worker.finished.connect(self.on_llm_reply)
         self.worker.start()
 
     def on_llm_reply(self, reply: str):
-        cursor = self.chat_display.textCursor()
-        cursor.movePosition(QTextCursor.End)
-        # remove trailing "..."
+        self._stop_deep_thinking_timer()
+        if reply.startswith("[Error]"):
+            self._set_mood("error")
+        else:
+            self._set_mood("success")
         self.chat_display.append(f"<b style='color:{GREEN}'>Kairos:</b> {reply}")
+        self.speak_reply(reply)
+        QTimer.singleShot(2500, self._reset_mood)
+
+    # ------------------------------------------------------------------
+    # Voice (speech-to-text + text-to-speech + meter + mood)
+    # ------------------------------------------------------------------
+    def toggle_talk(self):
+        if self.talk_btn.isChecked():
+            self._start_listening()
+        else:
+            self._stop_listening()
+
+    def _start_listening(self):
+        self._stop_speaking()
+        self.voice_meter.setVisible(True)
+        self._set_mood("listening")
+        self.talk_btn.setText("Stop")
+        self.voice_worker = VoiceWorker()
+        self.voice_worker.level.connect(self.voice_meter.set_level)
+        self.voice_worker.result.connect(self._on_voice_result)
+        self.voice_worker.error.connect(self._on_voice_error)
+        self.voice_worker.start()
+
+    def _stop_listening(self):
+        if hasattr(self, "voice_worker") and self.voice_worker is not None:
+            self.voice_worker.stop()
+            self.voice_worker = None
+        self.talk_btn.setChecked(False)
+        self.talk_btn.setText("Talk")
+        self.voice_meter.setVisible(False)
+        self.voice_meter.set_level(0.0)
+
+    def _on_voice_result(self, text):
+        self._stop_listening()
+        if text and text.strip():
+            self.chat_input.setText(text.strip())
+            self.send_message()
+
+    def _on_voice_error(self, msg):
+        self._stop_listening()
+        self._set_mood("error")
+        self.chat_display.append(f"<b style='color:{RED}'>Voice:</b> {msg}")
+        QTimer.singleShot(2000, self._reset_mood)
+
+    def speak_reply(self, text):
+        clean = text.replace("[Error]", "").strip()
+        if not clean:
+            return
+        self._speaking = True
+        self.voice_meter.setVisible(True)
+        self._set_mood("speaking")
+        self.speak_worker = SpeakWorker(clean)
+        self.speak_worker.finished_speaking.connect(self._on_speak_finished)
+        self.speak_worker.start()
+        self._speak_anim_timer = QTimer(self)
+        self._speak_anim_timer.timeout.connect(self._speak_pulse)
+        self._speak_anim_timer.start(80)
+
+    def _speak_pulse(self):
+        if not getattr(self, "_speaking", False):
+            return
+        v = 0.5 + 0.5 * math.sin(time.time() * 8)
+        self.voice_meter.set_level(max(0.1, v))
+
+    def _on_speak_finished(self):
+        self._speaking = False
+        if hasattr(self, "_speak_anim_timer"):
+            self._speak_anim_timer.stop()
+        self.voice_meter.set_level(0.0)
+        self.voice_meter.setVisible(False)
+        if self.mood.mood() == "speaking":
+            self._set_mood("success")
+
+    def _stop_speaking(self):
+        self._speaking = False
+        if hasattr(self, "_speak_anim_timer"):
+            self._speak_anim_timer.stop()
+        if hasattr(self, "speak_worker") and self.speak_worker is not None:
+            try:
+                self.speak_worker.requestInterruption()
+            except Exception:
+                pass
+
+    def _set_mood(self, mood):
+        self.mood.set_mood(mood)
+
+    def _reset_mood(self):
+        if self.mood.mood() not in ("listening", "speaking"):
+            self._set_mood("idle")
+
+    def _start_deep_thinking_timer(self):
+        self._thinking_elapsed = 0
+        self._deep_timer = QTimer(self)
+        self._deep_timer.timeout.connect(self._tick_thinking)
+        self._deep_timer.start(1000)
+
+    def _tick_thinking(self):
+        self._thinking_elapsed += 1
+        if self._thinking_elapsed >= 10:
+            self._set_mood("deep_thinking")
+
+    def _stop_deep_thinking_timer(self):
+        if hasattr(self, "_deep_timer"):
+            self._deep_timer.stop()
+            self._deep_timer = None
 
     def new_session(self):
         self.chat_display.clear()

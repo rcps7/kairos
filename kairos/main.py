@@ -6,7 +6,10 @@ import threading
 import time
 from pathlib import Path
 
-from PySide6.QtWidgets import QApplication, QInputDialog
+from PySide6.QtWidgets import (
+    QApplication, QDialog, QVBoxLayout, QHBoxLayout,
+    QLabel, QLineEdit, QComboBox, QPushButton, QGroupBox, QFormLayout,
+)
 
 from kairos.config import load_config, save_config
 from kairos.email_client import EmailClient
@@ -318,35 +321,181 @@ class KairosEngine:
             pass
 
 
+LLM_PRESETS = [
+    {
+        "id": "moonshot",
+        "name": "Moonshot AI (Kimi)",
+        "api_url": "https://api.moonshot.ai/v1/chat/completions",
+        "model": "kimi-k3",
+    },
+    {
+        "id": "deepseek",
+        "name": "DeepSeek",
+        "api_url": "https://api.deepseek.com/chat/completions",
+        "model": "deepseek-chat",
+    },
+    {
+        "id": "openai",
+        "name": "OpenAI",
+        "api_url": "https://api.openai.com/v1/chat/completions",
+        "model": "gpt-4o-mini",
+    },
+    {
+        "id": "openrouter",
+        "name": "OpenRouter",
+        "api_url": "https://openrouter.ai/api/v1/chat/completions",
+        "model": "openrouter/auto",
+    },
+    {
+        "id": "groq",
+        "name": "Groq",
+        "api_url": "https://api.groq.com/openai/v1/chat/completions",
+        "model": "llama-3.3-70b-versatile",
+    },
+]
+
+
+class SetupDialog(QDialog):
+    """First-run setup wizard with skippable Telegram and a provider dropdown."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Kairos Setup")
+        self.resize(520, 400)
+        self.telegram_token = None
+        self.llm = None  # dict {provider_id, api_url, api_key, model} or None
+
+        self.setStyleSheet("""
+            QDialog { background-color: #0d1117; }
+            QLabel { color: #e6edf3; font-family: 'Segoe UI', sans-serif; }
+            QLineEdit, QComboBox {
+                background-color: #1c2128; color: #00ff66;
+                border: 1px solid #30363d; border-radius: 4px; padding: 6px;
+                font-family: 'Consolas', monospace;
+            }
+            QPushButton {
+                background-color: #2d333b; color: #e6edf3;
+                border: 1px solid #30363d; border-radius: 5px; padding: 7px 16px;
+                font-family: 'Segoe UI', sans-serif;
+            }
+            QPushButton:hover { background-color: #3a4149; color: #00ff66; }
+            QGroupBox {
+                border: 1px solid #30363d; border-radius: 6px; margin-top: 10px;
+                color: #00ff66; font-weight: bold; font-family: 'Segoe UI', sans-serif;
+            }
+            QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }
+        """)
+
+        layout = QVBoxLayout(self)
+
+        # --- Telegram (skippable) ---
+        tg_box = QGroupBox("Telegram (optional)")
+        tg_layout = QVBoxLayout(tg_box)
+        tg_row = QHBoxLayout()
+        self.tg_edit = QLineEdit()
+        self.tg_edit.setPlaceholderText("Bot token from @BotFather")
+        self.tg_edit.setEchoMode(QLineEdit.Password)
+        self.skip_tg_btn = QPushButton("Skip")
+        self.skip_tg_btn.clicked.connect(self._skip_telegram)
+        tg_row.addWidget(self.tg_edit, 1)
+        tg_row.addWidget(self.skip_tg_btn)
+        tg_layout.addLayout(tg_row)
+        layout.addWidget(tg_box)
+
+        # --- LLM provider (dropdown) ---
+        llm_box = QGroupBox("LLM Provider")
+        llm_layout = QFormLayout(llm_box)
+        self.provider_combo = QComboBox()
+        for preset in LLM_PRESETS:
+            self.provider_combo.addItem(preset["name"], preset)
+        self.provider_combo.addItem("Custom / Other", None)
+        self.provider_combo.currentIndexChanged.connect(self._on_provider_changed)
+
+        self.id_edit = QLineEdit()
+        self.url_edit = QLineEdit()
+        self.model_edit = QLineEdit()
+        self.key_edit = QLineEdit()
+        self.key_edit.setEchoMode(QLineEdit.Password)
+        self.key_edit.setPlaceholderText("Required")
+
+        llm_layout.addRow("Provider:", self.provider_combo)
+        llm_layout.addRow("Provider ID:", self.id_edit)
+        llm_layout.addRow("API URL:", self.url_edit)
+        llm_layout.addRow("Model:", self.model_edit)
+        llm_layout.addRow("API Key:", self.key_edit)
+        layout.addWidget(llm_box)
+
+        # --- Buttons ---
+        btn_row = QHBoxLayout()
+        self.skip_llm_btn = QPushButton("Skip LLM")
+        self.skip_llm_btn.clicked.connect(self._skip_llm)
+        self.finish_btn = QPushButton("Continue")
+        self.finish_btn.setStyleSheet("background-color: #00b84d; color: #0d1117; font-weight: bold;")
+        self.finish_btn.clicked.connect(self._finish)
+        btn_row.addWidget(self.skip_llm_btn)
+        btn_row.addStretch()
+        btn_row.addWidget(self.finish_btn)
+        layout.addLayout(btn_row)
+
+        self._on_provider_changed()
+
+    def _on_provider_changed(self):
+        preset = self.provider_combo.currentData()
+        if preset:
+            self.id_edit.setText(preset["id"])
+            self.url_edit.setText(preset["api_url"])
+            self.model_edit.setText(preset["model"])
+        else:
+            self.id_edit.setText("")
+            self.url_edit.setText("")
+            self.model_edit.setText("")
+
+    def _skip_telegram(self):
+        self.tg_edit.clear()
+        self.tg_edit.setPlaceholderText("Skipped — you can add it later in Settings")
+        self.telegram_token = None
+        self.skip_tg_btn.setEnabled(False)
+
+    def _skip_llm(self):
+        self.llm = None
+        self.accept()
+
+    def _finish(self):
+        token = self.tg_edit.text().strip()
+        self.telegram_token = token or None
+
+        api_key = self.key_edit.text().strip()
+        if not api_key:
+            self.llm = None
+        else:
+            provider_id = self.id_edit.text().strip() or "custom"
+            api_url = self.url_edit.text().strip()
+            model = self.model_edit.text().strip()
+            self.llm = {
+                "provider_id": provider_id,
+                "api_url": api_url,
+                "api_key": api_key,
+                "model": model,
+            }
+        self.accept()
+
+
 def prompt_for_setup(cfg: dict) -> bool:
-    token, ok1 = QInputDialog.getText(None, "Kairos Setup", "Enter Telegram Bot Token:")
-    if not ok1 or not token.strip():
-        return False
-    cfg["telegram_token"] = token.strip()
-    save_config(cfg)
+    dlg = SetupDialog()
+    if dlg.exec() != QDialog.Accepted:
+        # User closed the window; proceed with whatever is already in cfg.
+        return True
 
-    provider_id, ok2 = QInputDialog.getText(None, "Kairos Setup", "LLM Provider ID (e.g. moonshot):", text="moonshot")
-    if not ok2 or not provider_id.strip():
-        return False
-    api_url, ok3 = QInputDialog.getText(
-        None, "Kairos Setup", "LLM API URL:",
-        text="https://api.moonshot.ai/v1/chat/completions"
-    )
-    if not ok3 or not api_url.strip():
-        return False
-    api_key, ok4 = QInputDialog.getText(None, "Kairos Setup", "LLM API Key:")
-    if not ok4 or not api_key.strip():
-        return False
-    model, ok5 = QInputDialog.getText(None, "Kairos Setup", "LLM Model:", text="kimi-k3")
-    if not ok5 or not model.strip():
-        return False
-
-    cfg["llm_providers"][provider_id.strip()] = {
-        "api_url": api_url.strip(),
-        "api_key": api_key.strip(),
-        "model": model.strip()
-    }
-    cfg["active_llm"] = provider_id.strip()
+    if dlg.telegram_token:
+        cfg["telegram_token"] = dlg.telegram_token
+    if dlg.llm:
+        pid = dlg.llm["provider_id"]
+        cfg["llm_providers"][pid] = {
+            "api_url": dlg.llm["api_url"],
+            "api_key": dlg.llm["api_key"],
+            "model": dlg.llm["model"],
+        }
+        cfg["active_llm"] = pid
     save_config(cfg)
     return True
 
@@ -361,9 +510,7 @@ def main():
 
     cfg = load_config()
     if not cfg.get("telegram_token") or not has_llm_provider(cfg):
-        if not prompt_for_setup(cfg):
-            print("Setup cancelled. Telegram token and LLM API key are required.")
-            sys.exit(1)
+        prompt_for_setup(cfg)
         cfg = load_config()
 
     engine = KairosEngine()
