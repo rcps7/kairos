@@ -1083,7 +1083,9 @@ class KairosGUI(QMainWindow):
         else:
             self._set_mood("success")
         self.chat_display.append(f"<b style='color:{GREEN}'>Kairos:</b> {reply}")
-        self.speak_reply(reply)
+        if getattr(self, "_voice_reply", False):
+            self._voice_reply = False
+            self.speak_reply(reply)
         QTimer.singleShot(2500, self._reset_mood)
 
     # ------------------------------------------------------------------
@@ -1119,6 +1121,7 @@ class KairosGUI(QMainWindow):
         self._stop_listening()
         if text and text.strip():
             self.chat_input.setText(text.strip())
+            self._voice_reply = True
             self.send_message()
 
     def _on_voice_error(self, msg):
