@@ -8,6 +8,7 @@ Provides:
 """
 
 import math
+import threading
 import time
 
 import numpy as np
@@ -15,6 +16,28 @@ import numpy as np
 from PySide6.QtCore import Qt, QThread, Signal, QTimer, QRectF
 from PySide6.QtGui import QPainter, QColor, QPen
 from PySide6.QtWidgets import QWidget
+
+# Persistent TTS engine: pyttsx3.init() is slow (~1-2s), so reuse one engine.
+_tts_lock = threading.Lock()
+_tts_engine = None
+_tts_available = True
+
+
+def _get_tts_engine():
+    global _tts_engine, _tts_available
+    with _tts_lock:
+        if _tts_engine is None and _tts_available:
+            try:
+                import pyttsx3
+                _tts_engine = pyttsx3.init()
+                try:
+                    _tts_engine.setProperty("rate", 180)
+                except Exception:
+                    pass
+            except Exception:
+                _tts_available = False
+                _tts_engine = None
+        return _tts_engine
 
 
 # ---------------------------------------------------------------------------
@@ -99,18 +122,13 @@ class SpeakWorker(QThread):
 
     def run(self):
         try:
-            import pyttsx3
-            engine = pyttsx3.init()
-            try:
-                engine.setProperty("rate", 170)
-            except Exception:
-                pass
-            engine.say(self.text)
-            engine.runAndWait()
-            try:
-                engine.stop()
-            except Exception:
-                pass
+            with _tts_lock:
+                engine = _get_tts_engine()
+                if engine is None:
+                    self.finished_speaking.emit()
+                    return
+                engine.say(self.text)
+                engine.runAndWait()
         except Exception:
             pass
         self.finished_speaking.emit()

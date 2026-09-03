@@ -543,8 +543,11 @@ def main():
     app = QApplication(sys.argv)
 
     cfg = load_config()
-    if not cfg.get("telegram_token") or not has_llm_provider(cfg):
+    if not cfg.get("setup_done"):
         prompt_for_setup(cfg)
+        cfg = load_config()
+        cfg["setup_done"] = True
+        save_config(cfg)
         cfg = load_config()
 
     engine = KairosEngine()

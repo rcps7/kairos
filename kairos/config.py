@@ -20,7 +20,8 @@ DEFAULT_CONFIG = {
     "peripherals": {
         "default_baud": 115200
     },
-    "retention_days": 30
+    "retention_days": 30,
+    "setup_done": False
 }
 
 
