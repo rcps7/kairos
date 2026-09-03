@@ -49,6 +49,8 @@ class TelegramBot:
             self.app.add_handler(CommandHandler("send", self.send_command))
             self.app.add_handler(CommandHandler("read", self.read_command))
             self.app.add_handler(CommandHandler("close", self.close_command))
+            self.app.add_handler(CommandHandler("remember", self.remember_command))
+            self.app.add_handler(CommandHandler("memory", self.memory_command))
             self.app.add_handler(CommandHandler("kill", self.kill_command))
             self.app.add_handler(CallbackQueryHandler(self.button_handler))
 
@@ -336,6 +338,27 @@ class TelegramBot:
             await update.message.reply_text(f"Closed {device}")
         except Exception as e:
             await update.message.reply_text(f"Close failed: {e}")
+
+    async def remember_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        content = " ".join(context.args)
+        if not content:
+            await update.message.reply_text("Usage: /remember <note or fact to save>")
+            return
+        try:
+            await asyncio.to_thread(self.engine.add_memory, content)
+            await update.message.reply_text("Saved to retention.")
+        except Exception as e:
+            await update.message.reply_text(f"Save failed: {e}")
+
+    async def memory_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        memories = self.engine.list_memories()
+        if not memories:
+            await update.message.reply_text("No retained data.")
+            return
+        lines = ["Retained data:"]
+        for mem_id, content, created in memories[:10]:
+            lines.append(f"- {content[:200]}")
+        await update.message.reply_text("\n".join(lines)[:3800])
 
     async def kill_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Confirm before engaging the kill switch."""

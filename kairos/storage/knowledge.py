@@ -43,7 +43,108 @@ class KnowledgeStore:
                     created_at TEXT
                 );
             """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS memories (
+                    id TEXT PRIMARY KEY,
+                    content TEXT,
+                    created_at TEXT
+                );
+            """)
             self.conn.commit()
+
+    # ---- Memories (user-retained data for later recall) ----
+    def add_memory(self, content: str) -> str:
+        import uuid
+        mem_id = uuid.uuid4().hex
+        now = datetime.now(timezone.utc).isoformat()
+        with self._lock:
+            cur = self.conn.cursor()
+            cur.execute(
+                "INSERT INTO memories (id, content, created_at) VALUES (?,?,?)",
+                (mem_id, content, now)
+            )
+            self.conn.commit()
+        if self.collection is not None:
+            with self._vec_lock:
+                try:
+                    self.collection.add(
+                        ids=[mem_id],
+                        documents=[content],
+                        metadatas=[{"kind": "memory", "content": content[:200]}]
+                    )
+                except Exception:
+                    pass
+        return mem_id
+
+    def list_memories(self):
+        with self._lock:
+            cur = self.conn.cursor()
+            cur.execute("SELECT id, content, created_at FROM memories ORDER BY created_at DESC")
+            return cur.fetchall()
+
+    def delete_memory(self, mem_id: str):
+        with self._lock:
+            cur = self.conn.cursor()
+            cur.execute("DELETE FROM memories WHERE id = ?", (mem_id,))
+            self.conn.commit()
+        if self.collection is not None:
+            with self._vec_lock:
+                try:
+                    self.collection.delete(ids=[mem_id])
+                except Exception:
+                    pass
+
+    def search_memories(self, query: str, limit: int = 10):
+        if self.collection is None:
+            with self._lock:
+                cur = self.conn.cursor()
+                cur.execute(
+                    "SELECT id, content, created_at FROM memories WHERE content LIKE ? ORDER BY created_at DESC LIMIT ?",
+                    (f"%{query}%", limit)
+                )
+                return cur.fetchall()
+        with self._vec_lock:
+            try:
+                res = self.collection.query(
+                    query_texts=[query],
+                    n_results=limit,
+                    where={"kind": "memory"},
+                )
+                ids = res.get("ids", [[]])[0]
+                if not ids:
+                    return []
+                out = []
+                with self._lock:
+                    for mid in ids:
+                        cur = self.conn.cursor()
+                        cur.execute("SELECT id, content, created_at FROM memories WHERE id = ?", (mid,))
+                        row = cur.fetchone()
+                        if row:
+                            out.append(row)
+                return out
+            except Exception:
+                return []
+
+    def recall(self, query: str, limit: int = 8):
+        """Return related memories + knowledge documents for a query."""
+        related = []
+        for mid, content, created in self.search_memories(query, limit):
+            related.append({"kind": "memory", "id": mid, "text": content})
+        docs = self.semantic_search(query, limit)
+        if docs:
+            ids = docs.get("ids", [[]])[0]
+            metas = docs.get("metadatas", [[]])[0]
+            with self._lock:
+                for i, did in enumerate(ids):
+                    cur = self.conn.cursor()
+                    cur.execute("SELECT summary FROM documents WHERE id = ?", (did,))
+                    row = cur.fetchone()
+                    meta = metas[i] if i < len(metas) else {}
+                    text = row[0] if row and row[0] else meta.get("summary", "")
+                    if text:
+                        related.append({"kind": "document", "id": did, "text": text})
+        return related
+
 
     def add_document(self, doc_id: str, url: str, raw_html: str, cleaned: str, summary: str):
         now = datetime.now(timezone.utc).isoformat()

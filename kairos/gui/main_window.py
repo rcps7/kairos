@@ -45,7 +45,7 @@ class LLMWorker(QThread):
             if self.task == "reflect":
                 reply = self.engine.reflect()
             else:
-                reply = self.engine.ask_llm(self.prompt)
+                reply = self.engine.chat_with_recall(self.prompt)
             self.finished.emit(reply)
         except Exception as e:
             self.finished.emit(f"[Error] {e}")
@@ -609,15 +609,49 @@ class RetentionDialog(QDialog):
     def __init__(self, engine, parent=None):
         super().__init__(parent)
         self.engine = engine
-        self.setWindowTitle("Retention - Delete Expired Items")
+        self.setWindowTitle("Retention - Saved Data")
         self.setStyleSheet(_dialog_style())
-        self.resize(620, 420)
+        self.resize(680, 520)
         layout = QVBoxLayout(self)
         layout.setSpacing(10)
 
-        header = QLabel("Expired Items (older than retention period)")
-        header.setStyleSheet(f"font-size: 15px; font-weight: bold; color: {GREEN};")
-        layout.addWidget(header)
+        # --- Add new retained data ---
+        add_header = QLabel("Add Data to Retention")
+        add_header.setStyleSheet(f"font-size: 15px; font-weight: bold; color: {GREEN};")
+        layout.addWidget(add_header)
+
+        self.add_edit = QLineEdit()
+        self.add_edit.setPlaceholderText("Type a note / fact / idea to save for later recall...")
+        self.add_edit.returnPressed.connect(self._add_memory)
+        add_row = QHBoxLayout()
+        add_row.addWidget(self.add_edit, 1)
+        self.add_btn = QPushButton("Save")
+        self.add_btn.setStyleSheet(f"background-color: {GREEN_DIM}; color: {BG_DARK}; font-weight: bold;")
+        self.add_btn.clicked.connect(self._add_memory)
+        add_row.addWidget(self.add_btn)
+        layout.addLayout(add_row)
+
+        # --- Retained data list ---
+        mem_header = QLabel("Retained Data")
+        mem_header.setStyleSheet(f"font-size: 15px; font-weight: bold; color: {GREEN};")
+        layout.addWidget(mem_header)
+
+        self.mem_list = QListWidget()
+        layout.addWidget(self.mem_list, 1)
+        self._refresh_memories()
+
+        mem_btn_row = QHBoxLayout()
+        self.del_mem_btn = QPushButton("Delete Selected Memory")
+        self.del_mem_btn.setStyleSheet(f"background-color: {RED}; color: white;")
+        self.del_mem_btn.clicked.connect(self._delete_memory)
+        mem_btn_row.addWidget(self.del_mem_btn)
+        mem_btn_row.addStretch()
+        layout.addLayout(mem_btn_row)
+
+        # --- Expired items (deletion) ---
+        exp_header = QLabel("Expired Items (older than retention period)")
+        exp_header.setStyleSheet(f"font-size: 15px; font-weight: bold; color: {GREEN};")
+        layout.addWidget(exp_header)
 
         self.list_widget = QListWidget()
         layout.addWidget(self.list_widget)
@@ -641,6 +675,37 @@ class RetentionDialog(QDialog):
         btn_row.addWidget(self.delete_btn)
         btn_row.addWidget(self.cancel_btn)
         layout.addLayout(btn_row)
+
+    def _refresh_memories(self):
+        self.mem_list.clear()
+        for mem_id, content, created in self.engine.list_memories():
+            qitem = QListWidgetItem(content[:120])
+            qitem.setData(Qt.UserRole, mem_id)
+            qitem.setToolTip(content)
+            self.mem_list.addItem(qitem)
+
+    def _add_memory(self):
+        text = self.add_edit.text().strip()
+        if not text:
+            return
+        try:
+            self.engine.add_memory(text)
+            self.add_edit.clear()
+            self._refresh_memories()
+        except Exception as e:
+            QMessageBox.warning(self, "Kairos", f"Save failed: {e}")
+
+    def _delete_memory(self):
+        item = self.mem_list.currentItem()
+        if not item:
+            QMessageBox.information(self, "Kairos", "Select a memory to delete.")
+            return
+        mem_id = item.data(Qt.UserRole)
+        try:
+            self.engine.delete_memory(mem_id)
+            self._refresh_memories()
+        except Exception as e:
+            QMessageBox.warning(self, "Kairos", f"Delete failed: {e}")
 
     def delete_selected(self):
         selected = []

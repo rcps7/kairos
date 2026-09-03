@@ -112,6 +112,27 @@ class KairosEngine:
             self.record_error("llm.generate", e)
             raise
 
+    def chat_with_recall(self, prompt: str) -> str:
+        """Answer a user message, injecting related retained data as context."""
+        try:
+            related = self.knowledge.recall(prompt, limit=6)
+            if related:
+                context_lines = []
+                for item in related:
+                    context_lines.append(f"- {item['text'][:400]}")
+                context = "\n".join(context_lines)
+                full_prompt = (
+                    "You are KAIROS. Use the following related information from the "
+                    "user's retained knowledge/memory if it helps answer the question.\n\n"
+                    f"RELATED INFORMATION:\n{context}\n\n"
+                    f"USER QUESTION: {prompt}"
+                )
+                return self.ask_llm(full_prompt)
+            return self.ask_llm(prompt)
+        except Exception as e:
+            self.record_error("chat.recall", e)
+            return self.ask_llm(prompt)
+
     # ---- Web ----
     def search_web(self, query: str, max_results: int = 10) -> list:
         try:
@@ -249,6 +270,19 @@ class KairosEngine:
 
     def approve_retention_deletion(self, selected_ids: list) -> int:
         return self.retention.approve(selected_ids)
+
+    # ---- Memories (user-retained data) ----
+    def add_memory(self, content: str) -> str:
+        return self.knowledge.add_memory(content)
+
+    def list_memories(self) -> list:
+        return self.knowledge.list_memories()
+
+    def delete_memory(self, mem_id: str):
+        self.knowledge.delete_memory(mem_id)
+
+    def recall(self, query: str, limit: int = 8) -> list:
+        return self.knowledge.recall(query, limit)
 
     # ---- Learning / self-improvement ----
     def record_error(self, context: str, error: str):

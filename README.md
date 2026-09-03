@@ -194,6 +194,8 @@ buttons**, and is divided into three panes:
 | `/mail` | Read latest email |
 | `/sendmail <to> <subject> \| <body>` | Send email |
 | `/expired` | List items due for retention deletion |
+| `/remember <text>` | Save a note/fact to retained data |
+| `/memory` | List retained data |
 | `/providers` | List LLM providers |
 | `/setllm <id>` | Switch active LLM provider |
 | `/reflect` | Analyze recent errors and store a lesson |
