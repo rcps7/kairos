@@ -45,44 +45,34 @@ BROWSER_HEADER_VARIANTS = [
 
 
 class WebSearcher:
-    """Search the web using DuckDuckGo HTML (no API key required)."""
+    """Search the web using DuckDuckGo via the ddgs library (no API key)."""
 
     def __init__(self):
-        self.client = httpx.Client(
-            timeout=30.0,
-            follow_redirects=True,
-            headers={"User-Agent": USER_AGENT},
-        )
+        self._ddgs = None
+
+    def _get_ddgs(self):
+        if self._ddgs is None:
+            from ddgs import DDGS
+            self._ddgs = DDGS()
+        return self._ddgs
 
     def search(self, query: str, max_results: int = 10) -> list:
-        url = "https://html.duckduckgo.com/html/"
-        resp = self.client.post(url, data={"q": query})
-        resp.raise_for_status()
-        soup = BeautifulSoup(resp.text, "html.parser")
-
-        links = soup.select("a.result__a")
-        snippets = soup.select("a.result__snippet")
-
+        ddgs = self._get_ddgs()
+        raw = ddgs.text(query, max_results=max_results)
         results = []
-        for i, link in enumerate(links):
-            title = link.get_text(strip=True)
-            href = link.get("href")
-            if not href:
+        for item in raw:
+            title = item.get("title") or ""
+            href = item.get("href") or item.get("url") or ""
+            desc = item.get("body") or item.get("description") or ""
+            if not title and not href:
                 continue
-            if href.startswith("//"):
-                href = "https:" + href
-
-            snippet = ""
-            if i < len(snippets):
-                snippet = snippets[i].get_text(strip=True)
-
-            results.append({"title": title, "url": href, "description": snippet})
+            results.append({"title": title, "url": href, "description": desc})
             if len(results) >= max_results:
                 break
         return results
 
     def close(self):
-        self.client.close()
+        self._ddgs = None
 
 
 class WebScraper:
