@@ -8,7 +8,8 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                                QFileDialog, QCheckBox, QDialog, QFormLayout,
                                QListWidgetItem, QLabel, QDialogButtonBox,
                                QMessageBox, QToolBar, QGroupBox, QFrame,
-                               QGridLayout, QComboBox, QTreeWidget, QTreeWidgetItem)
+                               QGridLayout, QComboBox, QTreeWidget, QTreeWidgetItem,
+                               QScrollArea)
 from PySide6.QtCore import Qt, Signal, QThread, QSize, QTimer
 from PySide6.QtGui import QAction, QFont, QColor, QPalette, QIcon, QTextCursor
 
@@ -435,6 +436,7 @@ class SkillDialog(QDialog):
         self.tree = QTreeWidget()
         self.tree.setHeaderLabels(["Skill", "Description"])
         self.tree.itemSelectionChanged.connect(self._on_select)
+        self.tree.itemDoubleClicked.connect(self._on_item_run)
         left_layout.addWidget(self.tree)
         left_layout.addWidget(self._build_left_buttons())
         layout.addWidget(left, 1)
@@ -509,6 +511,13 @@ class SkillDialog(QDialog):
         self.save_btn.setEnabled(True)
         self.test_btn.setEnabled(True)
         self._current_name = name
+
+    def _on_item_run(self, item, column):
+        name = item.data(0, Qt.UserRole)
+        if not name:
+            return
+        self._on_select()
+        self._run_skill()
 
     def _new_skill(self):
         name, ok = self._input("New Skill", "Skill name (lowercase, underscores):")
@@ -825,7 +834,7 @@ class KairosGUI(QMainWindow):
     # ------------------------------------------------------------------
     def _build_left_panel(self):
         panel = QWidget()
-        panel.setFixedWidth(200)
+        panel.setFixedWidth(210)
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(8, 8, 8, 8)
 
@@ -846,8 +855,59 @@ class KairosGUI(QMainWindow):
         self.skills_list.itemClicked.connect(self._on_skill_clicked)
         layout.addWidget(self.skills_list)
 
+        # --- Custom skills as clickable buttons ---
+        custom_title = QLabel("MY SKILLS")
+        custom_title.setStyleSheet(f"color: {GREEN}; font-weight: bold; font-family: 'Consolas', monospace;")
+        layout.addWidget(custom_title)
+
+        self.custom_skills_container = QWidget()
+        self.custom_skills_layout = QVBoxLayout(self.custom_skills_container)
+        self.custom_skills_layout.setContentsMargins(0, 0, 0, 0)
+        self.custom_skills_layout.setSpacing(4)
+
+        self.custom_skills_scroll = QScrollArea()
+        self.custom_skills_scroll.setWidgetResizable(True)
+        self.custom_skills_scroll.setWidget(self.custom_skills_container)
+        self.custom_skills_scroll.setFrameShape(QFrame.NoFrame)
+        layout.addWidget(self.custom_skills_scroll, 1)
+
         layout.addStretch()
+        self.refresh_skill_buttons()
         return panel
+
+    def refresh_skill_buttons(self):
+        """Rebuild the clickable buttons for user-created skills."""
+        while self.custom_skills_layout.count():
+            item = self.custom_skills_layout.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+
+        skills = self.engine.list_skills()
+        if not skills:
+            lbl = QLabel("No custom skills yet.\nUse 'Create / View Skills'.")
+            lbl.setStyleSheet(f"color: {TEXT_GREY}; font-family: 'Segoe UI', sans-serif;")
+            lbl.setWordWrap(True)
+            self.custom_skills_layout.addWidget(lbl)
+            return
+
+        for skill in skills:
+            name = skill["name"]
+            btn = QPushButton(name)
+            btn.setToolTip(skill.get("description", name))
+            btn.setStyleSheet(
+                f"QPushButton {{ background-color: {BG_BUTTON}; color: {TEXT}; "
+                f"border: 1px solid {BORDER}; border-radius: 4px; padding: 6px 8px; "
+                f"text-align: left; font-family: 'Segoe UI', sans-serif; }}"
+                f"QPushButton:hover {{ background-color: {BG_BUTTON_HOVER}; color: {GREEN}; }}"
+                f"QPushButton:pressed {{ background-color: {GREEN_DIM}; color: {BG_DARK}; }}"
+            )
+            btn.clicked.connect(lambda checked=False, n=name: self._run_skill_button(n))
+            self.custom_skills_layout.addWidget(btn)
+
+    def _run_skill_button(self, name):
+        self.chat_display.append(f"<b style='color:{GREEN}'>Running skill:</b> {name}")
+        self._run_bg(lambda: str(self.engine.run_skill(name)), f"Skill {name}")
 
     def _build_chat_panel(self):
         panel = QWidget()
@@ -1224,6 +1284,7 @@ class KairosGUI(QMainWindow):
     def open_skill_dialog(self):
         SkillDialog(self.engine, self).exec()
         self.refresh_status_bar()
+        self.refresh_skill_buttons()
 
     def run_reflection(self):
         self.chat_display.append(f"<b style='color:{GREEN}'>Kairos:</b> Reflecting on recent errors ...")
