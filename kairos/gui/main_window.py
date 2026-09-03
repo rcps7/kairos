@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                                QListWidgetItem, QLabel, QDialogButtonBox,
                                QMessageBox, QToolBar, QGroupBox, QFrame,
                                QGridLayout, QComboBox, QTreeWidget, QTreeWidgetItem,
-                               QScrollArea)
+                               QScrollArea, QMenu)
 from PySide6.QtCore import Qt, Signal, QThread, QSize, QTimer
 from PySide6.QtGui import QAction, QFont, QColor, QPalette, QIcon, QTextCursor
 
@@ -903,11 +903,50 @@ class KairosGUI(QMainWindow):
                 f"QPushButton:pressed {{ background-color: {GREEN_DIM}; color: {BG_DARK}; }}"
             )
             btn.clicked.connect(lambda checked=False, n=name: self._run_skill_button(n))
+            btn.setContextMenuPolicy(Qt.CustomContextMenu)
+            btn.customContextMenuRequested.connect(
+                lambda pos, n=name: self._skill_button_menu(n, pos)
+            )
             self.custom_skills_layout.addWidget(btn)
+
+    def _skill_button_menu(self, name, pos):
+        menu = QMenu(self)
+        run_action = menu.addAction("Run")
+        edit_action = menu.addAction("Edit Code")
+        delete_action = menu.addAction("Delete")
+        action = menu.exec(self.custom_skills_container.mapToGlobal(pos))
+        if action == run_action:
+            self._run_skill_button(name)
+        elif action == edit_action:
+            self.open_skill_dialog()
+        elif action == delete_action:
+            self._delete_skill_by_name(name)
+
+    def _delete_skill_by_name(self, name):
+        confirm = QMessageBox.question(
+            self, "Delete Skill",
+            f"Delete skill '{name}' permanently?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if confirm != QMessageBox.Yes:
+            return
+        try:
+            self.engine.delete_skill(name)
+            self.refresh_skill_buttons()
+            self.refresh_status_bar()
+        except Exception as e:
+            QMessageBox.warning(self, "Kairos", f"Delete failed: {e}")
 
     def _run_skill_button(self, name):
         self.chat_display.append(f"<b style='color:{GREEN}'>Running skill:</b> {name}")
-        self._run_bg(lambda: str(self.engine.run_skill(name)), f"Skill {name}")
+        # Run on the main thread: skills may open Qt dialogs, which must
+        # never be created from a background thread.
+        try:
+            result = self.engine.run_skill(name)
+            self.chat_display.append(f"<b style='color:{GREEN}'>Skill {name}:</b> {result}")
+        except Exception as e:
+            self.chat_display.append(f"<b style='color:{RED}'>Skill {name} error:</b> {e}")
 
     def _build_chat_panel(self):
         panel = QWidget()
