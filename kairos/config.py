@@ -21,7 +21,12 @@ DEFAULT_CONFIG = {
         "default_baud": 115200
     },
     "retention_days": 30,
-    "setup_done": False
+    "setup_done": False,
+    "mirofish": {
+        "enabled": False,
+        "base_url": "http://localhost:5001",
+        "zep_api_key": None
+    }
 }
 
 
@@ -64,6 +69,11 @@ def load_config() -> dict:
         if not p.get("api_key"):
             p["api_key"] = _keyring_get(f"llm_api_key_{pid}")
 
+    # Load MiroFish Zep key from keyring
+    mirofish = cfg.setdefault("mirofish", {})
+    if not mirofish.get("zep_api_key"):
+        mirofish["zep_api_key"] = _keyring_get("mirofish_zep_api_key")
+
     return cfg
 
 
@@ -81,6 +91,11 @@ def save_config(cfg: dict):
         if p.get("api_key"):
             if _keyring_set(f"llm_api_key_{pid}", p["api_key"]):
                 p["api_key"] = None
+
+    mirofish = cfg.get("mirofish", {})
+    if mirofish.get("zep_api_key"):
+        if _keyring_set("mirofish_zep_api_key", mirofish["zep_api_key"]):
+            mirofish["zep_api_key"] = None
 
     with CONFIG_FILE.open("w", encoding="utf-8") as f:
         json.dump(cfg, f, indent=4)

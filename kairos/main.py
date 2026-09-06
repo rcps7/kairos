@@ -18,6 +18,9 @@ from kairos.learning import ErrorMemory, reflect
 from kairos.llm.client import LLMClient
 from kairos.media_downloader import MediaDownloader
 from kairos.peripherals.serial_manager import SerialManager
+from kairos.predictive.mirofish_client import MiroFishClient
+from kairos.predictive.quick_predictor import QuickPredictor
+from kairos.predictive.store import PredictiveStore
 from kairos.retention import RetentionManager
 from kairos.skills import SkillManager
 from kairos.storage.knowledge import KnowledgeStore
@@ -50,6 +53,9 @@ class KairosEngine:
         self.email = EmailClient()
         self.retention = RetentionManager(self)
         self.learning = ErrorMemory()
+        self.predictive_store = PredictiveStore()
+        self.mirofish = MiroFishClient(self.config.get("mirofish", {}).get("base_url", "http://localhost:5001"))
+        self.quick_predictor = QuickPredictor(self)
         self._loop = None
         self._thread = None
         self._retention_thread = None
@@ -284,6 +290,49 @@ class KairosEngine:
     def recall(self, query: str, limit: int = 8) -> list:
         return self.knowledge.recall(query, limit)
 
+    # ---- Predictive engine ----
+    def predict(self, question: str, files=None, links=None, text=None, mode="auto") -> dict:
+        """Run a prediction. mode: auto | mirofish | quick."""
+        from kairos.predictive.ingest import build_seed
+
+        try:
+            seed = build_seed(question, files=files, links=links, text=text, engine=self)
+            pid = self.predictive_store.add(question, source=mode, status="running")
+
+            mirofish_enabled = self.config.get("mirofish", {}).get("enabled", False)
+            use_mirofish = mode == "mirofish" or (mode == "auto" and mirofish_enabled)
+
+            report = None
+            source = "quick"
+            if use_mirofish:
+                try:
+                    if not self.mirofish.is_available():
+                        if mode == "mirofish":
+                            raise RuntimeError("MiroFish service is not reachable.")
+                    else:
+                        report = self.mirofish.predict(seed, question)
+                        source = "mirofish"
+                except Exception as e:
+                    if mode == "mirofish":
+                        raise
+                    self.record_error("predict.mirofish", e)
+                    report = None
+
+            if report is None:
+                report = self.quick_predictor.predict(seed, question)
+                source = "quick"
+
+            self.predictive_store.update(pid, status="done", report=report)
+            # Also save to retention so it's recallable later.
+            self.knowledge.add_memory(f"[Prediction] {question}\n{report[:3000]}")
+            return {"id": pid, "question": question, "source": source, "report": report}
+        except Exception as e:
+            self.record_error("predict", e)
+            raise
+
+    def list_predictions(self, limit: int = 10) -> list:
+        return self.predictive_store.list_recent(limit)
+
     # ---- Learning / self-improvement ----
     def record_error(self, context: str, error: str):
         self.learning.record(context, error)
@@ -347,6 +396,8 @@ class KairosEngine:
         self.web_search.close()
         self.web_scrape.close()
         self.learning.close()
+        self.predictive_store.close()
+        self.mirofish.close()
         self.llm.close()
         try:
             if PID_FILE.exists():

@@ -51,6 +51,7 @@ class TelegramBot:
             self.app.add_handler(CommandHandler("close", self.close_command))
             self.app.add_handler(CommandHandler("remember", self.remember_command))
             self.app.add_handler(CommandHandler("memory", self.memory_command))
+            self.app.add_handler(CommandHandler("predict", self.predict_command))
             self.app.add_handler(CommandHandler("kill", self.kill_command))
             self.app.add_handler(CallbackQueryHandler(self.button_handler))
 
@@ -359,6 +360,22 @@ class TelegramBot:
         for mem_id, content, created in memories[:10]:
             lines.append(f"- {content[:200]}")
         await update.message.reply_text("\n".join(lines)[:3800])
+
+    async def predict_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        question = " ".join(context.args)
+        if not question:
+            await update.message.reply_text("Usage: /predict <question>\n(e.g. /predict how will this affect public opinion?)")
+            return
+        await update.message.reply_text("Running prediction (this may take a while)...")
+        try:
+            result = await asyncio.to_thread(self.engine.predict, question, None, None, None, "auto")
+            report = result.get("report", "")
+            source = result.get("source", "?")
+            await update.message.reply_text(
+                f"[Prediction via {source}]\n\n{report}"[:3800]
+            )
+        except Exception as e:
+            await update.message.reply_text(f"Prediction error: {e}")
 
     async def kill_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Confirm before engaging the kill switch."""

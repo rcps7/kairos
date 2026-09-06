@@ -605,6 +605,145 @@ class SkillDialog(QDialog):
             parent.refresh_status_bar()
 
 
+class PredictWorker(QThread):
+    finished = Signal(dict)
+    error = Signal(str)
+
+    def __init__(self, engine, question, files, links, text, mode):
+        super().__init__()
+        self.engine = engine
+        self.question = question
+        self.files = files
+        self.links = links
+        self.text = text
+        self.mode = mode
+
+    def run(self):
+        try:
+            result = self.engine.predict(
+                self.question, files=self.files, links=self.links,
+                text=self.text, mode=self.mode
+            )
+            self.finished.emit(result)
+        except Exception as e:
+            self.error.emit(str(e))
+
+
+class PredictDialog(QDialog):
+    def __init__(self, engine, parent=None):
+        super().__init__(parent)
+        self.engine = engine
+        self.setWindowTitle("Predictive Engine")
+        self.setStyleSheet(_dialog_style())
+        self.resize(640, 520)
+        self.files = []
+        self.links = []
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
+
+        header = QLabel("Ask Kairos to predict an outcome")
+        header.setStyleSheet(f"font-size: 15px; font-weight: bold; color: {GREEN};")
+        layout.addWidget(header)
+
+        layout.addWidget(QLabel("Prediction question:"))
+        self.question_edit = QTextEdit()
+        self.question_edit.setPlaceholderText("e.g. How will this news affect public opinion in the next month?")
+        self.question_edit.setFixedHeight(80)
+        layout.addWidget(self.question_edit)
+
+        # Files (Excel/CSV)
+        files_row = QHBoxLayout()
+        files_row.addWidget(QLabel("Data files (Excel/CSV):"))
+        self.add_files_btn = QPushButton("Add Files")
+        self.add_files_btn.clicked.connect(self._add_files)
+        files_row.addWidget(self.add_files_btn)
+        files_row.addStretch()
+        layout.addLayout(files_row)
+        self.files_label = QLabel("(none)")
+        self.files_label.setStyleSheet(f"color: {TEXT_GREY};")
+        layout.addWidget(self.files_label)
+
+        # Links
+        layout.addWidget(QLabel("News / social media links (one per line):"))
+        self.links_edit = QTextEdit()
+        self.links_edit.setPlaceholderText("https://...\nhttps://...")
+        self.links_edit.setFixedHeight(70)
+        layout.addWidget(self.links_edit)
+
+        # Extra context
+        layout.addWidget(QLabel("Additional context (optional):"))
+        self.text_edit = QTextEdit()
+        self.text_edit.setFixedHeight(70)
+        layout.addWidget(self.text_edit)
+
+        # Mode
+        mode_row = QHBoxLayout()
+        mode_row.addWidget(QLabel("Engine:"))
+        self.mode_combo = QComboBox()
+        self.mode_combo.addItem("Auto (MiroFish if available, else Quick)", "auto")
+        self.mode_combo.addItem("Quick (in-Kairos debate)", "quick")
+        self.mode_combo.addItem("MiroFish (swarm simulation)", "mirofish")
+        mode_row.addWidget(self.mode_combo, 1)
+        layout.addLayout(mode_row)
+
+        # Run button
+        self.run_btn = QPushButton("Run Prediction")
+        self.run_btn.setStyleSheet(f"background-color: {GREEN_DIM}; color: {BG_DARK}; font-weight: bold;")
+        self.run_btn.clicked.connect(self._run)
+        layout.addWidget(self.run_btn)
+
+        # Result
+        self.status_label = QLabel("")
+        self.status_label.setStyleSheet(f"color: {TEXT_GREY};")
+        layout.addWidget(self.status_label)
+        self.result_display = QTextEdit()
+        self.result_display.setReadOnly(True)
+        layout.addWidget(self.result_display, 1)
+
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.accept)
+        layout.addWidget(close_btn)
+
+    def _add_files(self):
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, "Select data files", "",
+            "Data files (*.xlsx *.xls *.csv);;All files (*)"
+        )
+        if paths:
+            self.files.extend(paths)
+            self.files_label.setText("\n".join(p.split("/")[-1].split("\\")[-1] for p in self.files))
+
+    def _run(self):
+        question = self.question_edit.toPlainText().strip()
+        if not question:
+            QMessageBox.warning(self, "Kairos", "Enter a prediction question.")
+            return
+        links = [l.strip() for l in self.links_edit.toPlainText().splitlines() if l.strip()]
+        text = self.text_edit.toPlainText().strip() or None
+        mode = self.mode_combo.currentData()
+
+        self.run_btn.setEnabled(False)
+        self.status_label.setText("Running prediction (this may take a while)...")
+        self.result_display.clear()
+        self.worker = PredictWorker(self.engine, question, self.files, links, text, mode)
+        self.worker.finished.connect(self._on_done)
+        self.worker.error.connect(self._on_error)
+        self.worker.start()
+
+    def _on_done(self, result):
+        self.run_btn.setEnabled(True)
+        source = result.get("source", "?")
+        report = result.get("report", "")
+        self.status_label.setText(f"Done (engine: {source})")
+        self.result_display.setPlainText(report)
+
+    def _on_error(self, msg):
+        self.run_btn.setEnabled(True)
+        self.status_label.setText("Failed")
+        self.result_display.setPlainText(f"[Error] {msg}")
+
+
 class RetentionDialog(QDialog):
     def __init__(self, engine, parent=None):
         super().__init__(parent)
@@ -858,6 +997,9 @@ class KairosGUI(QMainWindow):
         edit_menu.addSeparator()
         edit_menu.addAction("Skills", self.open_skill_dialog)
 
+        tools_menu = menubar.addMenu("&Tools")
+        tools_menu.addAction("Predictive Engine", self.open_predict_dialog)
+
         view_menu = menubar.addMenu("&View")
         view_menu.addAction("Self-Reflect", self.run_reflection)
         view_menu.addAction("Show Lessons", self.show_lessons)
@@ -884,6 +1026,7 @@ class KairosGUI(QMainWindow):
             ("Search", self._tool_search),
             ("Learn URL", self._tool_learn),
             ("Download", self._tool_download),
+            ("Predict", self.open_predict_dialog),
             ("Skills", self.open_skill_dialog),
             ("Providers", self.open_provider_dialog),
             ("Peripherals", self.open_peripheral_dialog),
@@ -914,6 +1057,7 @@ class KairosGUI(QMainWindow):
             "Email",
             "Downloads",
             "Peripheral Control",
+            "Predictive Engine",
             "Self-Reflect",
             "Create / View Skills",
         ])
@@ -1146,6 +1290,7 @@ class KairosGUI(QMainWindow):
             "Email": self.open_email_dialog,
             "Downloads": self._tool_download,
             "Peripheral Control": self.open_peripheral_dialog,
+            "Predictive Engine": self.open_predict_dialog,
             "Self-Reflect": self.run_reflection,
             "Create / View Skills": self.open_skill_dialog,
         }
@@ -1384,6 +1529,9 @@ class KairosGUI(QMainWindow):
 
     def open_retention_dialog(self):
         RetentionDialog(self.engine, self).exec()
+
+    def open_predict_dialog(self):
+        PredictDialog(self.engine, self).exec()
 
     def open_skill_dialog(self):
         SkillDialog(self.engine, self).exec()

@@ -91,14 +91,33 @@ def reflect(engine, limit: int = 8) -> str:
     for ctx, err, ts in errors:
         lines.append(f"[{ts}] {ctx}: {err}")
 
+    # Include recent prediction reports so the agent can reflect on its
+    # forecasting quality too.
+    prediction_context = ""
+    try:
+        predictions = engine.predictive_store.list_recent(limit=5)
+        if predictions:
+            pred_lines = []
+            for pid, question, source, status, report, created in predictions:
+                pred_lines.append(
+                    f"- Q: {question}\n  Engine: {source} | Status: {status}\n  {report[:500]}"
+                )
+            prediction_context = (
+                "\n\nRECENT PREDICTIONS (for forecasting self-assessment):\n"
+                + "\n".join(pred_lines)
+            )
+    except Exception:
+        prediction_context = ""
+
     prompt = (
         "You are the self-improvement module of an AI agent. "
-        "Below are recent errors and limitations encountered by the agent. "
+        "Below are recent errors, limitations, and prediction outputs encountered by the agent. "
         "Analyze them and produce:\n"
         "1) ROOT CAUSES - a short list\n"
         "2) CORRECTIVE ACTIONS - clear, actionable steps the agent should take\n"
-        "3) LESSON LEARNED - one paragraph to remember for future use\n\n"
-        "ERRORS:\n" + "\n".join(lines)
+        "3) LESSON LEARNED - one paragraph to remember for future use\n"
+        "4) FORECASTING NOTES - how to improve future predictions (if predictions are present)\n\n"
+        "ERRORS:\n" + "\n".join(lines) + prediction_context
     )
     analysis = engine.ask_llm(prompt)
     engine.learning.add_lesson(analysis)

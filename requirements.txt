@@ -11,3 +11,5 @@ SpeechRecognition>=3.10
 pyttsx3>=2.90
 ddgs>=6.0
 lxml>=5.0
+pandas>=2.0
+openpyxl>=3.1

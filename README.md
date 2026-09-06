@@ -399,6 +399,43 @@ KAIROS maintains a persistent error log and learns from its mistakes.
 
 ---
 
+## Predictive Engine
+
+KAIROS includes a prediction feature that turns seed material (news links, social
+media links, Excel/CSV data, or free text) into a forecast report.
+
+### Quick prediction (built-in)
+
+Runs a small multi-agent debate (3 analyst personas, 2 rounds) using your active
+LLM, then synthesizes a report. No external service needed.
+
+- **GUI:** `Tools → Predictive Engine` (or the **Predict** toolbar button)
+- **Telegram:** `/predict <question>`
+
+### MiroFish swarm simulation (optional)
+
+For full multi-agent swarm simulation, KAIROS can talk to a separately-run
+**MiroFish** service (`https://github.com/666ghj/MiroFish`) over HTTP.
+
+1. Install/run MiroFish independently (Docker or its own Python 3.12 venv —
+   MiroFish needs Python ≤3.12, while KAIROS uses 3.14, so they must be separate).
+2. In `config.json`, set:
+   ```json
+   "mirofish": {
+     "enabled": true,
+     "base_url": "http://localhost:5001",
+     "zep_api_key": null
+   }
+   ```
+3. Enter your **Zep** API key via the GUI or config (stored in the keyring).
+
+When `enabled` is true and MiroFish is reachable, `mode=auto` uses it; otherwise
+KAIROS falls back to the built-in quick predictor. Prediction reports are saved
+to the predictions store and retention, and are included in **Self-Reflect** for
+forecasting self-assessment.
+
+---
+
 ## Configuration File
 
 Location: `%USERPROFILE%\.kairos\config.json`
