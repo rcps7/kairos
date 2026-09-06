@@ -249,6 +249,52 @@ class StorageDialog(QDialog):
         super().accept()
 
 
+class MiroFishDialog(QDialog):
+    def __init__(self, engine, parent=None):
+        super().__init__(parent)
+        self.engine = engine
+        self.setWindowTitle("MiroFish / Predictive Settings")
+        self.setStyleSheet(_dialog_style())
+        self.resize(460, 260)
+        layout = QFormLayout(self)
+        layout.setSpacing(12)
+
+        cfg = engine.config.get("mirofish", {})
+        self.enabled_check = QCheckBox("Enable MiroFish swarm simulation")
+        self.enabled_check.setChecked(bool(cfg.get("enabled", False)))
+        self.base_url_edit = QLineEdit()
+        self.base_url_edit.setText(cfg.get("base_url", "http://localhost:5001"))
+        self.zep_key_edit = QLineEdit()
+        self.zep_key_edit.setEchoMode(QLineEdit.Password)
+        self.zep_key_edit.setText(cfg.get("zep_api_key") or "")
+        self.zep_key_edit.setPlaceholderText("Zep API key (for MiroFish agent memory)")
+
+        layout.addRow(self.enabled_check)
+        layout.addRow("MiroFish base URL:", self.base_url_edit)
+        layout.addRow("Zep API Key:", self.zep_key_edit)
+
+        hint = QLabel("Get a free Zep key at https://app.getzep.com/\nMiroFish runs separately (see README).")
+        hint.setStyleSheet(f"color: {TEXT_GREY}; font-family: 'Segoe UI', sans-serif;")
+        layout.addRow(hint)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addRow(buttons)
+
+    def accept(self):
+        cfg = self.engine.config
+        mirofish = cfg.setdefault("mirofish", {})
+        mirofish["enabled"] = self.enabled_check.isChecked()
+        mirofish["base_url"] = self.base_url_edit.text().strip() or "http://localhost:5001"
+        mirofish["zep_api_key"] = self.zep_key_edit.text().strip() or None
+        from kairos.config import save_config
+        save_config(cfg)
+        self.engine.config = cfg
+        QMessageBox.information(self, "Kairos", "MiroFish settings saved.")
+        super().accept()
+
+
 class EmailDialog(QDialog):
     def __init__(self, engine, parent=None):
         super().__init__(parent)
@@ -991,6 +1037,7 @@ class KairosGUI(QMainWindow):
         edit_menu.addAction("LLM Providers", self.open_provider_dialog)
         edit_menu.addAction("Storage Settings", self.open_storage_dialog)
         edit_menu.addAction("Email Settings", self.open_email_dialog)
+        edit_menu.addAction("MiroFish Settings", self.open_mirofish_dialog)
         edit_menu.addSeparator()
         edit_menu.addAction("Peripheral Control", self.open_peripheral_dialog)
         edit_menu.addAction("Retention (Delete Expired)", self.open_retention_dialog)
@@ -1523,6 +1570,9 @@ class KairosGUI(QMainWindow):
 
     def open_email_dialog(self):
         EmailDialog(self.engine, self).exec()
+
+    def open_mirofish_dialog(self):
+        MiroFishDialog(self.engine, self).exec()
 
     def open_peripheral_dialog(self):
         PeripheralDialog(self.engine, self).exec()
