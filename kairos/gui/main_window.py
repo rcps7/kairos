@@ -14,6 +14,7 @@ from PySide6.QtCore import Qt, Signal, QThread, QSize, QTimer
 from PySide6.QtGui import QAction, QFont, QColor, QPalette, QIcon, QTextCursor
 
 from kairos.gui.voice_widgets import VoiceWorker, SpeakWorker, VoiceMeter, MoodIndicator
+from kairos import updater
 
 # ---------------------------------------------------------------------------
 # Colour palette (dark theme + fluorescent green accents + grey-white buttons)
@@ -66,6 +67,32 @@ class SkillGenWorker(QThread):
             self.finished.emit(code)
         except Exception as e:
             self.finished.emit(f"[Error] {e}")
+
+
+class UpdateCheckWorker(QThread):
+    result = Signal(dict)
+
+    def run(self):
+        self.result.emit(updater.check_for_update())
+
+
+class UpdateDownloadWorker(QThread):
+    done = Signal(str)
+    failed = Signal(str)
+
+    def __init__(self, url):
+        super().__init__()
+        self.url = url
+
+    def run(self):
+        try:
+            import tempfile
+            tmp = tempfile.mkdtemp(prefix="kairos_update_")
+            updater.download_and_extract(self.url, tmp)
+            root = updater.find_update_root(tmp)
+            self.done.emit(str(root))
+        except Exception as e:
+            self.failed.emit(str(e))
 
 
 def _dialog_style() -> str:
@@ -1153,6 +1180,9 @@ class KairosGUI(QMainWindow):
 
         self.setCentralWidget(splitter)
 
+        # Check for updates (at most once per day).
+        QTimer.singleShot(1500, self.maybe_auto_check_updates)
+
     # ------------------------------------------------------------------
     # Menu bar
     # ------------------------------------------------------------------
@@ -1194,6 +1224,121 @@ class KairosGUI(QMainWindow):
 
         help_menu = menubar.addMenu("&Help")
         help_menu.addAction("About Kairos", self.show_about)
+
+        # --- Top-right update button ---
+        self.update_btn = QPushButton("Check for updates")
+        self.update_btn.setCursor(Qt.PointingHandCursor)
+        self.update_btn.setStyleSheet(
+            f"QPushButton {{ background-color: {BG_BUTTON}; color: {TEXT}; "
+            f"border: 1px solid {BORDER}; border-radius: 4px; padding: 3px 10px; margin-right: 6px; }}"
+            f"QPushButton:hover {{ background-color: {BG_BUTTON_HOVER}; color: {GREEN}; }}"
+        )
+        self.update_btn.clicked.connect(self.on_update_button)
+        self._update_info = None
+        menubar.setCornerWidget(self.update_btn, Qt.TopRightCorner)
+
+    # ------------------------------------------------------------------
+    # Update checker
+    # ------------------------------------------------------------------
+    def maybe_auto_check_updates(self):
+        """Check for updates at most once per day."""
+        try:
+            last = float(self.engine.config.get("update", {}).get("last_check", 0))
+        except Exception:
+            last = 0
+        if time.time() - last >= 86400:
+            self._check_updates(silent=True)
+
+    def on_update_button(self):
+        info = self._update_info
+        if info and info.get("update_available"):
+            self._confirm_and_install(info)
+        else:
+            self._check_updates(silent=False)
+
+    def _check_updates(self, silent=True):
+        self._update_silent = silent
+        self.update_btn.setText("Checking...")
+        self.update_btn.setEnabled(False)
+        self._update_worker = UpdateCheckWorker()
+        self._update_worker.result.connect(self._on_update_result)
+        self._update_worker.start()
+
+    def _on_update_result(self, info: dict):
+        self.update_btn.setEnabled(True)
+        self._update_info = info
+
+        # Record the check time
+        cfg = self.engine.config
+        cfg.setdefault("update", {})["last_check"] = time.time()
+        try:
+            from kairos.config import save_config
+            save_config(cfg)
+        except Exception:
+            pass
+
+        if info.get("error"):
+            self.update_btn.setText("Check for updates")
+            if not self._update_silent:
+                QMessageBox.information(self, "Updates", f"Could not check for updates:\n{info['error']}")
+            return
+
+        if info.get("update_available"):
+            self.update_btn.setText("⬆ Update available")
+            self.update_btn.setStyleSheet(
+                f"QPushButton {{ background-color: {GREEN_DIM}; color: {BG_DARK}; font-weight: bold; "
+                f"border: 1px solid {GREEN}; border-radius: 4px; padding: 3px 10px; margin-right: 6px; }}"
+            )
+        else:
+            self.update_btn.setText("✓ Up to date")
+            self.update_btn.setStyleSheet(
+                f"QPushButton {{ background-color: {BG_BUTTON}; color: {TEXT_GREY}; "
+                f"border: 1px solid {BORDER}; border-radius: 4px; padding: 3px 10px; margin-right: 6px; }}"
+            )
+
+    def _confirm_and_install(self, info):
+        msg = (
+            f"A new version of Kairos is available.\n\n"
+            f"Installed: {info.get('local_version')}\n"
+            f"New: {info.get('latest_version')}\n\n"
+        )
+        if info.get("notes"):
+            msg += f"Release notes:\n{info['notes'][:800]}\n\n"
+        msg += "Install now? Kairos will close, update itself, and restart."
+        if QMessageBox.question(self, "Install Update", msg,
+                                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes) != QMessageBox.Yes:
+            return
+        self._install_update(info)
+
+    def _install_update(self, info):
+        url = info.get("download_url")
+        if not url:
+            QMessageBox.warning(self, "Update", "No download is available for this release.")
+            return
+        self.update_btn.setText("Downloading...")
+        self.update_btn.setEnabled(False)
+        self._dl_worker = UpdateDownloadWorker(url)
+        self._dl_worker.done.connect(self._on_update_downloaded)
+        self._dl_worker.failed.connect(self._on_update_failed)
+        self._dl_worker.start()
+
+    def _on_update_downloaded(self, update_root):
+        try:
+            bat = updater.create_updater_batch(update_root)
+            updater.launch_updater(bat)
+        except Exception as e:
+            QMessageBox.warning(self, "Update", f"Failed to start the updater:\n{e}")
+            self.update_btn.setEnabled(True)
+            self.update_btn.setText("⬆ Update available")
+            return
+        # Hand over to the updater batch and exit.
+        from PySide6.QtWidgets import QApplication as _QApp
+        _QApp.quit()
+
+    def _on_update_failed(self, msg):
+        QMessageBox.warning(self, "Update", f"Download failed:\n{msg}")
+        self.update_btn.setEnabled(True)
+        self.update_btn.setText("⬆ Update available")
 
     # ------------------------------------------------------------------
     # Toolbar

@@ -436,6 +436,24 @@ forecasting self-assessment.
 
 ---
 
+## Updates
+
+KAIROS can update itself from GitHub Releases.
+
+- On startup it checks for a new release **once per day**.
+- A button in the **top-right corner** shows the state:
+  - **Check for updates** — click to check manually
+  - **⬆ Update available** — a newer release exists
+  - **✓ Up to date** — no newer release
+- Clicking **Update available** asks for confirmation, then downloads the new
+  release, replaces the program files, installs any new dependencies from
+  `requirements.txt`, and restarts KAIROS.
+
+Your data is never touched: config, API keys (keyring), custom skills, the
+knowledge library, and media are all preserved.
+
+---
+
 ## Configuration File
 
 Location: `%USERPROFILE%\.kairos\config.json`

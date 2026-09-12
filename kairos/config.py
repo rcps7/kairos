@@ -26,6 +26,9 @@ DEFAULT_CONFIG = {
         "enabled": False,
         "base_url": "http://localhost:5001",
         "zep_api_key": None
+    },
+    "update": {
+        "last_check": 0
     }
 }
 
