@@ -906,6 +906,141 @@ class RetentionDialog(QDialog):
         self.accept()
 
 
+def _format_response(text: str) -> str:
+    """Convert a response into HTML, preserving code blocks with indentation."""
+    if "```" not in text:
+        return html.escape(text).replace("\n", "<br>")
+
+    parts = text.split("```")
+    out = []
+    for i, part in enumerate(parts):
+        if i % 2 == 0:
+            if part.strip():
+                escaped = html.escape(part).replace("\n", "<br>")
+                out.append(f"<span>{escaped}</span>")
+        else:
+            # Code block: strip an optional language tag on the first line.
+            lines = part.split("\n")
+            if lines and lines[0].strip() and not lines[0].strip().startswith(("import", "def", "print", "class")):
+                # likely a language hint like "python"
+                if len(lines[0].strip()) < 12 and " " not in lines[0].strip():
+                    lines = lines[1:]
+            code = "\n".join(lines).rstrip("\n")
+            escaped_code = html.escape(code).replace(" ", "&nbsp;")
+            escaped_code = escaped_code.replace("\n", "<br>")
+            out.append(
+                f"<span style='font-family: Consolas, monospace; background-color: {BG_INPUT}; "
+                f"padding: 2px 4px;'>{escaped_code}</span>"
+            )
+    return "".join(out)
+
+
+class MessageBubble(QFrame):
+    """A single chat message with optional copy/edit buttons."""
+
+    def __init__(self, gui, sender: str, text: str, role: str, color: str, raw_html: bool = False, parent=None):
+        super().__init__(parent)
+        self.gui = gui
+        self.sender = sender
+        self.raw_text = text
+        self.role = role
+        self.color = color
+        self.raw_html = raw_html
+
+        self.setObjectName("messageBubble")
+        self.setStyleSheet(
+            f"#messageBubble {{ background-color: {BG_PANEL}; border: 1px solid {BORDER}; "
+            f"border-radius: 6px; }}"
+        )
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(8, 6, 8, 6)
+        outer.setSpacing(4)
+
+        # Header row: sender + action buttons
+        header = QHBoxLayout()
+        header.setSpacing(4)
+        sender_label = QLabel(sender)
+        sender_label.setStyleSheet(
+            f"color: {color}; font-weight: bold; font-family: 'Segoe UI', sans-serif; font-size: 12px;"
+        )
+        header.addWidget(sender_label)
+        header.addStretch()
+
+        self.copy_btn = None
+        self.edit_btn = None
+
+        if role in ("kairos", "system"):
+            self.copy_btn = self._small_icon("⧉", "Copy")
+            self.copy_btn.clicked.connect(self.copy_text)
+            header.addWidget(self.copy_btn)
+
+        if role == "user":
+            self.edit_btn = self._small_icon("✎", "Edit")
+            self.edit_btn.clicked.connect(self.edit_text)
+            header.addWidget(self.edit_btn)
+
+        outer.addLayout(header)
+
+        # Body
+        self.body = QTextBrowser()
+        self.body.setReadOnly(True)
+        self.body.setOpenExternalLinks(True)
+        self.body.setFrameShape(QFrame.NoFrame)
+        self.body.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.body.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.body.document().setDefaultStyleSheet(
+            f"body {{ color: {TEXT}; font-family: 'Consolas', monospace; font-size: 13pt; "
+            f"line-height: 160%; word-spacing: 2px; }}"
+        )
+        self.body.setHtml(self._render())
+        self.body.document().setTextWidth(600)
+        outer.addWidget(self.body)
+        QTimer.singleShot(0, self._adjust_height)
+
+    def _render(self) -> str:
+        if self.raw_html:
+            return self.raw_text
+        if self.role in ("kairos", "system"):
+            return _format_response(self.raw_text)
+        return html.escape(self.raw_text).replace("\n", "<br>")
+
+    def _adjust_height(self):
+        width = self.body.viewport().width()
+        if width <= 0:
+            width = 600
+        self.body.document().setTextWidth(width)
+        height = self.body.document().size().height()
+        self.body.setFixedHeight(int(height) + 8)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._adjust_height()
+
+    def _small_icon(self, glyph: str, tip: str) -> QPushButton:
+        btn = QPushButton(glyph)
+        btn.setToolTip(tip)
+        btn.setCursor(Qt.PointingHandCursor)
+        btn.setFixedSize(22, 22)
+        btn.setStyleSheet(
+            f"QPushButton {{ background-color: transparent; border: none; color: {TEXT_GREY}; "
+            f"font-size: 13px; font-family: 'Segoe UI', sans-serif; }}"
+            f"QPushButton:hover {{ color: {GREEN}; background-color: {BG_BUTTON_HOVER}; border-radius: 4px; }}"
+        )
+        return btn
+
+    def copy_text(self):
+        QApplication.clipboard().setText(self.raw_text)
+
+    def edit_text(self):
+        self.gui.edit_user_message(self.raw_text)
+
+    def set_text(self, text: str):
+        self.raw_text = text
+        self.body.setHtml(self._render())
+        self._adjust_height()
+
+
 class KairosGUI(QMainWindow):
     def __init__(self, engine):
         super().__init__()
@@ -1195,14 +1330,14 @@ class KairosGUI(QMainWindow):
             QMessageBox.warning(self, "Kairos", f"Delete failed: {e}")
 
     def _run_skill_button(self, name):
-        self.chat_display.append(f"<b style='color:{GREEN}'>Running skill:</b> {name}")
+        self._append_bubble("Running skill", name, "system", GREEN)
         # Run on the main thread: skills may open Qt dialogs, which must
         # never be created from a background thread.
         try:
             result = self.engine.run_skill(name)
-            self.chat_display.append(f"<b style='color:{GREEN}'>Skill {name}:</b> {result}")
+            self._append_bubble(f"Skill {name}", str(result), "kairos", GREEN)
         except Exception as e:
-            self.chat_display.append(f"<b style='color:{RED}'>Skill {name} error:</b> {e}")
+            self._append_bubble(f"Skill {name} error", str(e), "system", RED)
 
     def _build_chat_panel(self):
         panel = QWidget()
@@ -1222,11 +1357,16 @@ class KairosGUI(QMainWindow):
         header.addWidget(self.mood)
         layout.addLayout(header)
 
-        self.chat_display = QTextBrowser()
-        self.chat_display.setReadOnly(True)
-        self.chat_display.setOpenExternalLinks(True)
-        self.chat_display.setPlaceholderText("Kairos is ready. Type a message below...")
-        layout.addWidget(self.chat_display, 1)
+        self.chat_scroll = QScrollArea()
+        self.chat_scroll.setWidgetResizable(True)
+        self.chat_scroll.setFrameShape(QFrame.NoFrame)
+        self.chat_container = QWidget()
+        self.chat_layout = QVBoxLayout(self.chat_container)
+        self.chat_layout.setContentsMargins(0, 0, 6, 0)
+        self.chat_layout.setSpacing(6)
+        self.chat_layout.addStretch(1)
+        self.chat_scroll.setWidget(self.chat_container)
+        layout.addWidget(self.chat_scroll, 1)
 
         self.voice_meter = VoiceMeter()
         self.voice_meter.setVisible(False)
@@ -1348,13 +1488,13 @@ class KairosGUI(QMainWindow):
     def _tool_search(self):
         query, ok = self._prompt("Web Search", "Enter search query:")
         if ok and query:
-            self.chat_display.append(f"<b style='color:{GREEN}'>Searching:</b> {query}")
-            self._run_bg(lambda: self._fmt_search(self.engine.search_web(query, max_results=10)), "Search")
+            self._append_bubble("Searching", query, "system", GREEN)
+            self._run_bg(lambda: self._fmt_search(self.engine.search_web(query, max_results=10)), "Search", raw_html=True)
 
     def _tool_learn(self):
         url, ok = self._prompt("Learn From Page", "Enter URL to scrape and summarize:")
         if ok and url:
-            self.chat_display.append(f"<b style='color:{GREEN}'>Learning:</b> {url}")
+            self._append_bubble("Learning", url, "system", GREEN)
             self._run_bg(lambda: self._safe_learn(url), "Learn")
 
     def _safe_learn(self, url):
@@ -1368,7 +1508,7 @@ class KairosGUI(QMainWindow):
         if ok and url:
             fmt, ok2 = self._prompt("Download", "Format (mp3 / mp4):", default="mp4")
             if ok2:
-                self.chat_display.append(f"<b style='color:{GREEN}'>Downloading:</b> {url} ({fmt})")
+                self._append_bubble("Downloading", f"{url} ({fmt})", "system", GREEN)
                 self._run_bg(
                     lambda: str(self.engine.download_media(url, fmt)), "Download"
                 )
@@ -1398,7 +1538,7 @@ class KairosGUI(QMainWindow):
     # ------------------------------------------------------------------
     # Background task runner
     # ------------------------------------------------------------------
-    def _run_bg(self, fn, task_name):
+    def _run_bg(self, fn, task_name, raw_html=False):
         class Task(QThread):
             finished = Signal(str)
 
@@ -1409,23 +1549,46 @@ class KairosGUI(QMainWindow):
                     self.finished.emit(f"[Error] {e}")
 
         worker = Task()
-        worker.finished.connect(lambda r: self._append_result(task_name, r))
+        worker.finished.connect(lambda r: self._append_result(task_name, r, raw_html))
         worker.start()
         self._worker = worker
 
-    def _append_result(self, task_name, result):
-        self.chat_display.append(f"<b style='color:{GREEN}'>{task_name}:</b> {result}")
+    def _append_result(self, task_name, result, raw_html=False):
+        self._append_bubble(f"{task_name}", result, "system", GREEN, raw_html=raw_html)
 
     # ------------------------------------------------------------------
     # Chat
     # ------------------------------------------------------------------
+    def _append_bubble(self, sender, text, role, color, raw_html=False):
+        bubble = MessageBubble(self, sender, text, role, color, raw_html=raw_html)
+        # insert before the trailing stretch item
+        self.chat_layout.insertWidget(self.chat_layout.count() - 1, bubble)
+        self._scroll_chat_bottom()
+        return bubble
+
+    def _scroll_chat_bottom(self):
+        QTimer.singleShot(0, lambda: self.chat_scroll.verticalScrollBar().setValue(
+            self.chat_scroll.verticalScrollBar().maximum()
+        ))
+
+    def _clear_bubbles(self):
+        while self.chat_layout.count() > 1:
+            item = self.chat_layout.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+
+    def edit_user_message(self, text):
+        self.chat_input.setText(text)
+        self.chat_input.setFocus()
+
     def send_message(self):
         text = self.chat_input.text().strip()
         if not text:
             return
-        self.chat_display.append(f"<b style='color:#58a6ff'>You:</b> {text}")
+        self._append_bubble("You", text, "user", "#58a6ff")
         self.chat_input.clear()
-        self.chat_display.append(f"<b style='color:{GREEN}'>Kairos:</b> ...")
+        self._pending_kairos_bubble = self._append_bubble("Kairos", "...", "kairos", GREEN)
         self._set_mood("thinking")
         self._start_deep_thinking_timer()
         self.worker = LLMWorker(self.engine, text)
@@ -1438,7 +1601,11 @@ class KairosGUI(QMainWindow):
             self._set_mood("error")
         else:
             self._set_mood("success")
-        self.chat_display.append(f"<b style='color:{GREEN}'>Kairos:</b> {reply}")
+        if getattr(self, "_pending_kairos_bubble", None):
+            self._pending_kairos_bubble.set_text(reply)
+            self._pending_kairos_bubble = None
+        else:
+            self._append_bubble("Kairos", reply, "kairos", GREEN)
         if getattr(self, "_voice_reply", False):
             self._voice_reply = False
             self.speak_reply(reply)
@@ -1483,7 +1650,7 @@ class KairosGUI(QMainWindow):
     def _on_voice_error(self, msg):
         self._stop_listening()
         self._set_mood("error")
-        self.chat_display.append(f"<b style='color:{RED}'>Voice:</b> {msg}")
+        self._append_bubble("Voice", msg, "system", RED)
         QTimer.singleShot(2000, self._reset_mood)
 
     def speak_reply(self, text):
@@ -1549,13 +1716,11 @@ class KairosGUI(QMainWindow):
             self._deep_timer = None
 
     def new_session(self):
-        self.chat_display.clear()
-        self.chat_display.setPlaceholderText("Kairos is ready. Type a message below...")
+        self._clear_bubbles()
 
     def clear_chat(self):
         """Clear only the on-screen chat window (no data is deleted)."""
-        self.chat_display.clear()
-        self.chat_display.setPlaceholderText("Kairos is ready. Type a message below...")
+        self._clear_bubbles()
 
     # ------------------------------------------------------------------
     # Menu actions
@@ -1589,7 +1754,7 @@ class KairosGUI(QMainWindow):
         self.refresh_skill_buttons()
 
     def run_reflection(self):
-        self.chat_display.append(f"<b style='color:{GREEN}'>Kairos:</b> Reflecting on recent errors ...")
+        self._pending_kairos_bubble = self._append_bubble("Kairos", "Reflecting on recent errors ...", "kairos", GREEN)
         self.worker = LLMWorker(self.engine, None, task="reflect")
         self.worker.finished.connect(self.on_llm_reply)
         self.worker.start()
@@ -1597,11 +1762,11 @@ class KairosGUI(QMainWindow):
     def show_lessons(self):
         lessons = self.engine.recent_lessons(5)
         if not lessons:
-            self.chat_display.append(f"<b style='color:{GREEN}'>Kairos:</b> No lessons learned yet.")
+            self._append_bubble("Kairos", "No lessons learned yet.", "kairos", GREEN)
             return
-        self.chat_display.append(f"<b style='color:{GREEN}'>Kairos:</b> Recent lessons:")
+        self._append_bubble("Kairos", "Recent lessons:", "kairos", GREEN)
         for l in lessons:
-            self.chat_display.append(l)
+            self._append_bubble("Kairos", l, "kairos", GREEN)
 
     def _toggle_maximize(self):
         if self.isMaximized():

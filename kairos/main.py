@@ -308,7 +308,12 @@ class KairosEngine:
                 try:
                     if not self.mirofish.is_available():
                         if mode == "mirofish":
-                            raise RuntimeError("MiroFish service is not reachable.")
+                            raise RuntimeError(
+                                "MiroFish service is not reachable at "
+                                f"{self.config.get('mirofish', {}).get('base_url', 'http://localhost:5001')}. "
+                                "MiroFish is a SEPARATE program you must install and run yourself "
+                                "(see README). To predict without it, use 'Auto' or 'Quick' mode."
+                            )
                     else:
                         report = self.mirofish.predict(seed, question)
                         source = "mirofish"
