@@ -29,6 +29,10 @@ DEFAULT_CONFIG = {
     },
     "update": {
         "last_check": 0
+    },
+    "council": {
+        "members": [],
+        "mode": "standard"
     }
 }
 

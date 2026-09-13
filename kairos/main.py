@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
 )
 
 from kairos.config import load_config, save_config
+from kairos.council import Council
 from kairos.email_client import EmailClient
 from kairos.gui.main_window import KairosGUI
 from kairos.learning import ErrorMemory, reflect
@@ -138,6 +139,42 @@ class KairosEngine:
         except Exception as e:
             self.record_error("chat.recall", e)
             return self.ask_llm(prompt)
+
+    # ---- Attachments & Council ----
+    def attach_context(self, paths):
+        """Extract text + image paths from attached files/folders."""
+        from kairos.attachments import build_attachment_context
+        summarize_fn = None
+        try:
+            summarize_fn = lambda t: self.ask_llm(t)
+        except Exception:
+            summarize_fn = None
+        return build_attachment_context(paths, summarize_fn=summarize_fn)
+
+    def council(self, prompt: str, members=None, attachment_paths=None,
+                mode: str = "standard", progress=None) -> dict:
+        """Run the multi-LLM council on a task."""
+        try:
+            context, images = ("", [])
+            if attachment_paths:
+                context, images = self.attach_context(attachment_paths)
+            if not members:
+                members = self.config.get("council", {}).get("members") or []
+            council = Council(self)
+            result = council.run(prompt, members, context=context, image_paths=images,
+                                 mode=mode, progress=progress)
+            # Save the final result for later recall.
+            try:
+                self.knowledge.add_memory(f"[Council] {prompt}\n{result.get('final', '')[:3000]}")
+            except Exception:
+                pass
+            return result
+        except Exception as e:
+            self.record_error("council", e)
+            raise
+
+    def list_providers(self) -> list:
+        return self.llm.list_providers()
 
     # ---- Web ----
     def search_web(self, query: str, max_results: int = 10) -> list:

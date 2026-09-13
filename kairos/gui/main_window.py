@@ -95,6 +95,31 @@ class UpdateDownloadWorker(QThread):
             self.failed.emit(str(e))
 
 
+class CouncilWorker(QThread):
+    progress = Signal(str)
+    finished = Signal(dict)
+    failed = Signal(str)
+
+    def __init__(self, engine, prompt, members, attachments, mode):
+        super().__init__()
+        self.engine = engine
+        self.prompt = prompt
+        self.members = members
+        self.attachments = attachments
+        self.mode = mode
+
+    def run(self):
+        try:
+            result = self.engine.council(
+                self.prompt, members=self.members,
+                attachment_paths=self.attachments, mode=self.mode,
+                progress=lambda t: self.progress.emit(t),
+            )
+            self.finished.emit(result)
+        except Exception as e:
+            self.failed.emit(str(e))
+
+
 def _dialog_style() -> str:
     return f"""
         QDialog {{ background-color: {BG_DARK}; }}
@@ -173,13 +198,14 @@ class ProviderDialog(QDialog):
         for pid, p in providers.items():
             model = p.get("model", "")
             key = "key OK" if p.get("api_key") else "NO KEY"
+            vision = " | vision" if p.get("vision") else ""
             marker = " * " if pid == active else "   "
-            self.provider_list.addItem(f"{marker} {pid}   |   {model}   |   {key}")
+            self.provider_list.addItem(f"{marker} {pid}   |   {model}   |   {key}{vision}")
 
     def add_provider(self):
         dlg = ProviderEditDialog(self)
         if dlg.exec():
-            self.engine.llm.add_provider(dlg.provider_id, dlg.api_url, dlg.api_key, dlg.model)
+            self.engine.llm.add_provider(dlg.provider_id, dlg.api_url, dlg.api_key, dlg.model, dlg.vision)
             self.refresh()
 
     def set_active(self):
@@ -215,10 +241,12 @@ class ProviderEditDialog(QDialog):
         self.key_edit.setEchoMode(QLineEdit.Password)
         self.model_edit = QLineEdit()
         self.model_edit.setText("kimi-k3")
+        self.vision_check = QCheckBox("Vision-capable (accepts images)")
         layout.addRow("Provider ID:", self.id_edit)
         layout.addRow("API URL:", self.url_edit)
         layout.addRow("API Key:", self.key_edit)
         layout.addRow("Model:", self.model_edit)
+        layout.addRow(self.vision_check)
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
@@ -229,6 +257,7 @@ class ProviderEditDialog(QDialog):
         self.api_url = self.url_edit.text().strip()
         self.api_key = self.key_edit.text().strip()
         self.model = self.model_edit.text().strip()
+        self.vision = self.vision_check.isChecked()
         if not self.provider_id or not self.api_url:
             QMessageBox.warning(self, "Kairos", "Provider ID and API URL are required.")
             return
@@ -1068,6 +1097,54 @@ class MessageBubble(QFrame):
         self._adjust_height()
 
 
+class OutputDialog(QDialog):
+    """A resizable, copyable window for long/verified output."""
+
+    def __init__(self, title: str, text: str, parent=None):
+        super().__init__(parent)
+        self.text = text
+        self.setWindowTitle(title)
+        self.setStyleSheet(_dialog_style())
+        self.resize(900, 700)
+        layout = QVBoxLayout(self)
+
+        self.view = QTextBrowser()
+        self.view.setReadOnly(True)
+        self.view.setOpenExternalLinks(True)
+        self.view.document().setDefaultStyleSheet(
+            f"body {{ color: {TEXT}; font-family: 'Consolas', monospace; font-size: 12pt; "
+            f"line-height: 155%; }} pre {{ background-color: {BG_INPUT}; }}"
+        )
+        self.view.setHtml(_format_response(text))
+        layout.addWidget(self.view, 1)
+
+        row = QHBoxLayout()
+        copy_btn = QPushButton("Copy All")
+        copy_btn.clicked.connect(self._copy)
+        save_btn = QPushButton("Save…")
+        save_btn.clicked.connect(self._save)
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.accept)
+        row.addWidget(copy_btn)
+        row.addWidget(save_btn)
+        row.addStretch()
+        row.addWidget(close_btn)
+        layout.addLayout(row)
+
+    def _copy(self):
+        QApplication.clipboard().setText(self.text)
+
+    def _save(self):
+        path, _ = QFileDialog.getSaveFileName(self, "Save Output", "kairos_output.md",
+                                              "Markdown (*.md);;Text (*.txt);;All files (*)")
+        if path:
+            try:
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(self.text)
+            except Exception as e:
+                QMessageBox.warning(self, "Kairos", f"Save failed: {e}")
+
+
 class KairosGUI(QMainWindow):
     def __init__(self, engine):
         super().__init__()
@@ -1517,10 +1594,46 @@ class KairosGUI(QMainWindow):
         self.voice_meter.setVisible(False)
         layout.addWidget(self.voice_meter)
 
+        # --- Council controls ---
+        self.attachments = []
+        council_row = QHBoxLayout()
+        self.council_check = QCheckBox("Council (multi-LLM)")
+        self.council_check.setToolTip("Use three LLMs that discuss, divide, and verify the task")
+        self.council_check.setStyleSheet(f"color: {TEXT}; font-family: 'Segoe UI', sans-serif;")
+        council_row.addWidget(self.council_check)
+        self.member_combos = []
+        providers = []
+        try:
+            providers = self.engine.list_providers()
+        except Exception:
+            providers = []
+        saved = self.engine.config.get("council", {}).get("members", [])
+        for i in range(3):
+            combo = QComboBox()
+            for pid in providers:
+                combo.addItem(pid, pid)
+            if i < len(saved) and saved[i] in providers:
+                combo.setCurrentText(saved[i])
+            elif i < len(providers):
+                combo.setCurrentIndex(i)
+            combo.setEnabled(False)
+            council_row.addWidget(combo)
+            self.member_combos.append(combo)
+        self.council_check.toggled.connect(self._toggle_council_controls)
+
+        self.attachments_label = QLabel("")
+        self.attachments_label.setStyleSheet(f"color: {TEXT_GREY}; font-family: 'Segoe UI', sans-serif;")
+        council_row.addStretch()
+        council_row.addWidget(self.attachments_label)
+        layout.addLayout(council_row)
+
         input_row = QHBoxLayout()
         self.chat_input = QLineEdit()
         self.chat_input.setPlaceholderText("Type your instruction here...")
         self.chat_input.returnPressed.connect(self.send_message)
+        self.attach_btn = QPushButton("📎 Attach")
+        self.attach_btn.setToolTip("Attach files or a folder (PDF, DOCX, TXT, CSV, XLSX, images)")
+        self.attach_btn.clicked.connect(self._show_attach_menu)
         self.talk_btn = QPushButton("Talk")
         self.talk_btn.setCheckable(True)
         self.talk_btn.clicked.connect(self.toggle_talk)
@@ -1532,12 +1645,51 @@ class KairosGUI(QMainWindow):
         self.clear_btn = QPushButton("Clear")
         self.clear_btn.clicked.connect(self.clear_chat)
         input_row.addWidget(self.chat_input, 1)
+        input_row.addWidget(self.attach_btn)
         input_row.addWidget(self.talk_btn)
         input_row.addWidget(self.send_btn)
         input_row.addWidget(self.clear_btn)
         layout.addLayout(input_row)
 
         return panel
+
+    def _toggle_council_controls(self, checked):
+        for combo in self.member_combos:
+            combo.setEnabled(checked)
+
+    def _show_attach_menu(self):
+        menu = QMenu(self)
+        files_action = menu.addAction("Attach Files…")
+        folder_action = menu.addAction("Attach Folder…")
+        clear_action = menu.addAction("Clear Attachments")
+        action = menu.exec(self.attach_btn.mapToGlobal(self.attach_btn.rect().bottomLeft()))
+        if action == files_action:
+            self._attach_files()
+        elif action == folder_action:
+            self._attach_folder()
+        elif action == clear_action:
+            self.attachments = []
+            self._update_attachment_label()
+
+    def _attach_files(self):
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, "Attach files", "",
+            "Documents (*.pdf *.docx *.txt *.md *.csv *.xlsx *.xls *.py *.json *.log);;"
+            "Images (*.png *.jpg *.jpeg *.bmp *.gif *.webp);;All files (*)"
+        )
+        if paths:
+            self.attachments.extend(paths)
+            self._update_attachment_label()
+
+    def _attach_folder(self):
+        folder = QFileDialog.getExistingDirectory(self, "Attach folder")
+        if folder:
+            self.attachments.append(folder)
+            self._update_attachment_label()
+
+    def _update_attachment_label(self):
+        n = len(self.attachments)
+        self.attachments_label.setText(f"{n} attachment(s) attached" if n else "")
 
     def _build_right_panel(self):
         panel = QWidget()
@@ -1731,6 +1883,9 @@ class KairosGUI(QMainWindow):
         text = self.chat_input.text().strip()
         if not text:
             return
+        if self.council_check.isChecked():
+            self._send_council(text)
+            return
         self._append_bubble("You", text, "user", "#58a6ff")
         self.chat_input.clear()
         self._pending_kairos_bubble = self._append_bubble("Kairos", "...", "kairos", GREEN)
@@ -1739,6 +1894,49 @@ class KairosGUI(QMainWindow):
         self.worker = LLMWorker(self.engine, text)
         self.worker.finished.connect(self.on_llm_reply)
         self.worker.start()
+
+    def _send_council(self, text):
+        members = [c.currentData() or c.currentText() for c in self.member_combos if (c.currentData() or c.currentText())]
+        members = [m for m in members if m]
+        if len(members) < 2:
+            QMessageBox.warning(self, "Council", "Need at least two providers configured for council mode.")
+            return
+        try:
+            from kairos.config import save_config
+            cfg = self.engine.config
+            cfg.setdefault("council", {})["members"] = members
+            save_config(cfg)
+        except Exception:
+            pass
+        self._append_bubble("You", text, "user", "#58a6ff")
+        if self.attachments:
+            self._append_bubble("Attachments", "\n".join(str(a) for a in self.attachments), "system", GREEN)
+        self.chat_input.clear()
+        self._set_mood("thinking")
+        self._start_deep_thinking_timer()
+        self._append_bubble("Council", f"Members: {', '.join(members)}", "system", GREEN)
+        self.council_worker = CouncilWorker(self.engine, text, members, list(self.attachments), "standard")
+        self.council_worker.progress.connect(lambda t: self._append_bubble("Council", t, "system", TEXT_GREY))
+        self.council_worker.finished.connect(self._on_council_done)
+        self.council_worker.failed.connect(self._on_council_failed)
+        self.council_worker.start()
+
+    def _on_council_done(self, result: dict):
+        self._stop_deep_thinking_timer()
+        self._set_mood("success")
+        final = result.get("final", "")
+        primary = result.get("primary", "?")
+        self._append_bubble("Kairos", f"[Council — primary: {primary}]\n\n{final}", "kairos", GREEN)
+        OutputDialog("Kairos Council Result", final, self).exec()
+        self.attachments = []
+        self._update_attachment_label()
+        QTimer.singleShot(2500, self._reset_mood)
+
+    def _on_council_failed(self, msg: str):
+        self._stop_deep_thinking_timer()
+        self._set_mood("error")
+        self._append_bubble("Council error", msg, "system", RED)
+        QTimer.singleShot(2500, self._reset_mood)
 
     def on_llm_reply(self, reply: str):
         self._stop_deep_thinking_timer()

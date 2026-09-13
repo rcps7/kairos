@@ -436,6 +436,59 @@ forecasting self-assessment.
 
 ---
 
+## Multi-LLM Council & Attachments
+
+### Multi-LLM Council (complex tasks)
+
+For complex work (software projects, large-data analysis), Kairos can run a
+**council of three different LLMs**:
+
+1. **Aptitude discussion** — each member assesses the task, states the role it
+   is best suited for, and votes for a lead.
+2. **Primary election** — the votes (then confidence) elect the Primary.
+3. **Work division** — the Primary breaks the task into subtasks and assigns
+   them to the two workers.
+4. **Execution** — the workers complete their parts.
+5. **Verification** — the Primary reviews, corrects and optimizes the result.
+
+- Enable with the **"Council (multi-LLM)"** checkbox next to the input and pick
+  the three members from the dropdowns (chosen **per run**, remembered for next
+  time).
+- A standard run costs ~7 LLM calls. Large inputs are chunked and summarized
+  first so the context stays comprehensive without exploding the token budget.
+- The final, verified result is shown in the chat **and opened in a new
+  copyable window** (with **Copy All** and **Save…**), and is saved to the
+  knowledge library for later recall.
+
+### Attachments
+
+The **📎 Attach** button adds context to a normal chat or a council run:
+
+- **Files**: PDF, DOCX, TXT/MD, CSV, XLSX/XLS, source code, JSON, logs.
+- **Folders**: added recursively (text-like files).
+- **Images**: PNG/JPG/etc. — routed to a **vision-capable** model.
+
+Use *Attach Files…*, *Attach Folder…*, or *Clear Attachments* from the menu.
+Large extracted text is chunked and summarized automatically.
+
+#### Free vision-capable models
+
+To use images, mark a provider as **vision-capable** (checkbox in the provider
+dialog) and give it a multimodal model. **OpenRouter** hosts free
+vision-capable models (for example models tagged `:free` with visual
+perception, such as InclusionAI Ling VL). Add an OpenRouter provider:
+
+| Field | Value |
+|-------|-------|
+| Provider ID | `openrouter` |
+| API URL | `https://openrouter.ai/api/v1/chat/completions` |
+| Model | a `:free` vision model (e.g. `inclusionai/ling-3.0-flash-vl:free`) |
+| Vision | ✅ enabled |
+
+If no vision-capable member is present, images are noted but not analyzed.
+
+---
+
 ## Updates
 
 KAIROS can update itself from GitHub Releases.

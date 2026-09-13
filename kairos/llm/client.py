@@ -1,3 +1,6 @@
+import base64
+import mimetypes
+
 import httpx
 
 from .. import config
@@ -16,6 +19,10 @@ class LLMClient:
     def list_providers(self) -> list:
         return list(self.providers.keys())
 
+    def is_vision(self, provider_id: str = None) -> bool:
+        pid = provider_id or self.active_provider
+        return bool(self.providers.get(pid, {}).get("vision", False))
+
     def set_active(self, provider_id: str) -> bool:
         cfg = config.load_config()
         if provider_id not in cfg.get("llm_providers", {}):
@@ -25,13 +32,14 @@ class LLMClient:
         self.active_provider = provider_id
         return True
 
-    def add_provider(self, provider_id: str, api_url: str, api_key: str, model: str) -> bool:
+    def add_provider(self, provider_id: str, api_url: str, api_key: str, model: str, vision: bool = False) -> bool:
         cfg = config.load_config()
         providers = cfg.setdefault("llm_providers", {})
         providers[provider_id] = {
             "api_url": api_url,
             "api_key": api_key,
-            "model": model
+            "model": model,
+            "vision": bool(vision),
         }
         config.save_config(cfg)
         self.providers = providers
@@ -68,6 +76,44 @@ class LLMClient:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
             ]
+        }
+        resp = self.client.post(p["api_url"], headers=headers, json=payload)
+        if resp.status_code >= 400:
+            raise RuntimeError(f"LLM error {resp.status_code} ({pid}): {resp.text[:500]}")
+        data = resp.json()
+        return data.get("choices", [{}])[0].get("message", {}).get("content", "")
+
+    def generate_with_images(self, user_prompt: str, image_paths, system_prompt: str = "You are a helpful assistant.", provider_id: str = None) -> str:
+        """Send a text prompt plus one or more images (OpenAI-compatible format)."""
+        pid = provider_id or self.active_provider
+        p = self.providers.get(pid)
+        if not p:
+            raise RuntimeError(f"LLM provider '{pid}' not configured.")
+        if not p.get("api_key"):
+            raise RuntimeError(f"API key missing for provider '{pid}'.")
+
+        content = [{"type": "text", "text": user_prompt}]
+        for img in image_paths:
+            try:
+                mime = mimetypes.guess_type(str(img))[0] or "image/png"
+                b64 = base64.b64encode(open(img, "rb").read()).decode("ascii")
+                content.append({
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{mime};base64,{b64}"}
+                })
+            except Exception:
+                continue
+
+        headers = {
+            "Authorization": f"Bearer {p['api_key']}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "model": p.get("model"),
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": content},
+            ],
         }
         resp = self.client.post(p["api_url"], headers=headers, json=payload)
         if resp.status_code >= 400:
