@@ -35,18 +35,36 @@ RED = "#ff4d4d"
 class LLMWorker(QThread):
     finished = Signal(str)
 
-    def __init__(self, engine, prompt, task="chat"):
+    def __init__(self, engine, prompt, task="chat", attachments=None):
         super().__init__()
         self.engine = engine
         self.prompt = prompt
         self.task = task
+        self.attachments = attachments or []
 
     def run(self):
         try:
             if self.task == "reflect":
                 reply = self.engine.reflect()
             else:
-                reply = self.engine.chat_with_recall(self.prompt)
+                prompt = self.prompt
+                if self.attachments:
+                    context, images = self.engine.attach_context(self.attachments)
+                    if context:
+                        prompt = (
+                            "Use the following attached material as context for your answer.\n\n"
+                            f"ATTACHED MATERIAL:\n{context}\n\n"
+                            f"USER MESSAGE: {self.prompt}"
+                        )
+                    if images:
+                        vis = [p for p in self.engine.list_providers() if self.engine.llm.is_vision(p)]
+                        if vis:
+                            reply = self.engine.llm.generate_with_images(
+                                prompt, images, provider_id=vis[0]
+                            )
+                            self.finished.emit(reply)
+                            return
+                reply = self.engine.chat_with_recall(prompt)
             self.finished.emit(reply)
         except Exception as e:
             self.finished.emit(f"[Error] {e}")
@@ -1602,23 +1620,12 @@ class KairosGUI(QMainWindow):
         self.council_check.setStyleSheet(f"color: {TEXT}; font-family: 'Segoe UI', sans-serif;")
         council_row.addWidget(self.council_check)
         self.member_combos = []
-        providers = []
-        try:
-            providers = self.engine.list_providers()
-        except Exception:
-            providers = []
-        saved = self.engine.config.get("council", {}).get("members", [])
         for i in range(3):
             combo = QComboBox()
-            for pid in providers:
-                combo.addItem(pid, pid)
-            if i < len(saved) and saved[i] in providers:
-                combo.setCurrentText(saved[i])
-            elif i < len(providers):
-                combo.setCurrentIndex(i)
             combo.setEnabled(False)
             council_row.addWidget(combo)
             self.member_combos.append(combo)
+        self.refresh_council_members()
         self.council_check.toggled.connect(self._toggle_council_controls)
 
         self.attachments_label = QLabel("")
@@ -1654,8 +1661,33 @@ class KairosGUI(QMainWindow):
         return panel
 
     def _toggle_council_controls(self, checked):
+        self.refresh_council_members()
         for combo in self.member_combos:
             combo.setEnabled(checked)
+
+    def refresh_council_members(self):
+        """Repopulate the council member dropdowns from configured providers."""
+        try:
+            providers = self.engine.list_providers()
+        except Exception:
+            providers = []
+        saved = self.engine.config.get("council", {}).get("members", [])
+        for i, combo in enumerate(self.member_combos):
+            current = combo.currentData() or combo.currentText()
+            combo.blockSignals(True)
+            combo.clear()
+            for pid in providers:
+                combo.addItem(pid, pid)
+            target = None
+            if i < len(saved) and saved[i] in providers:
+                target = saved[i]
+            elif current in providers:
+                target = current
+            elif i < len(providers):
+                target = providers[i]
+            if target:
+                combo.setCurrentText(target)
+            combo.blockSignals(False)
 
     def _show_attach_menu(self):
         menu = QMenu(self)
@@ -1881,17 +1913,22 @@ class KairosGUI(QMainWindow):
 
     def send_message(self):
         text = self.chat_input.text().strip()
-        if not text:
+        if not text and not self.attachments:
             return
         if self.council_check.isChecked():
             self._send_council(text)
             return
-        self._append_bubble("You", text, "user", "#58a6ff")
+        attachments = list(self.attachments)
+        self._append_bubble("You", text or "(attachments)", "user", "#58a6ff")
+        if attachments:
+            self._append_bubble("Attachments", "\n".join(str(a) for a in attachments), "system", GREEN)
+            self.attachments = []
+            self._update_attachment_label()
         self.chat_input.clear()
         self._pending_kairos_bubble = self._append_bubble("Kairos", "...", "kairos", GREEN)
         self._set_mood("thinking")
         self._start_deep_thinking_timer()
-        self.worker = LLMWorker(self.engine, text)
+        self.worker = LLMWorker(self.engine, text, attachments=attachments)
         self.worker.finished.connect(self.on_llm_reply)
         self.worker.start()
 
@@ -2070,7 +2107,9 @@ class KairosGUI(QMainWindow):
     # ------------------------------------------------------------------
     def open_provider_dialog(self):
         ProviderDialog(self.engine, self).exec()
+        self.engine.reload_llm()
         self.refresh_status_bar()
+        self.refresh_council_members()
 
     def open_storage_dialog(self):
         StorageDialog(self.engine, self).exec()
