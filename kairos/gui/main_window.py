@@ -218,7 +218,19 @@ class ProviderDialog(QDialog):
             key = "key OK" if p.get("api_key") else "NO KEY"
             vision = " | vision" if p.get("vision") else ""
             marker = " * " if pid == active else "   "
-            self.provider_list.addItem(f"{marker} {pid}   |   {model}   |   {key}{vision}")
+            item = QListWidgetItem(f"{marker} {pid}   |   {model}   |   {key}{vision}")
+            item.setData(Qt.UserRole, pid)
+            self.provider_list.addItem(item)
+
+    def _selected_pid(self):
+        item = self.provider_list.currentItem()
+        if not item:
+            return None
+        pid = item.data(Qt.UserRole)
+        if not pid:
+            # Fallback for older items without stored data.
+            pid = item.text().strip().lstrip("* ").split(" ")[0]
+        return pid
 
     def add_provider(self):
         dlg = ProviderEditDialog(self)
@@ -227,18 +239,16 @@ class ProviderDialog(QDialog):
             self.refresh()
 
     def set_active(self):
-        item = self.provider_list.currentItem()
-        if not item:
+        pid = self._selected_pid()
+        if not pid:
             return
-        pid = item.text().strip().lstrip("* ").split(" ")[0]
         if self.engine.llm.set_active(pid):
             self.refresh()
 
     def remove_provider(self):
-        item = self.provider_list.currentItem()
-        if not item:
+        pid = self._selected_pid()
+        if not pid:
             return
-        pid = item.text().strip().lstrip("* ").split(" ")[0]
         self.engine.llm.remove_provider(pid)
         self.refresh()
 
@@ -278,6 +288,9 @@ class ProviderEditDialog(QDialog):
         self.vision = self.vision_check.isChecked()
         if not self.provider_id or not self.api_url:
             QMessageBox.warning(self, "Kairos", "Provider ID and API URL are required.")
+            return
+        if "|" in self.provider_id:
+            QMessageBox.warning(self, "Kairos", "Provider ID cannot contain the '|' character.")
             return
         super().accept()
 
