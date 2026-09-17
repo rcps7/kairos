@@ -32,6 +32,19 @@ BORDER = "#30363d"
 RED = "#ff4d4d"
 
 
+def _merge_save(mutate):
+    """Apply a change to the on-disk config without clobbering other settings.
+
+    Always reloads the current config first so changes made elsewhere (e.g. a
+    provider added by LLMClient) are not lost.
+    """
+    from kairos.config import load_config, save_config
+    cfg = load_config()
+    mutate(cfg)
+    save_config(cfg)
+    return load_config()
+
+
 class LLMWorker(QThread):
     finished = Signal(str)
 
@@ -327,11 +340,7 @@ class StorageDialog(QDialog):
         if not path:
             QMessageBox.warning(self, "Kairos", "Please select a valid path.")
             return
-        cfg = self.engine.config
-        cfg["storage_root"] = path
-        from kairos.config import save_config
-        save_config(cfg)
-        self.engine.config = cfg
+        self.engine.config = _merge_save(lambda c: c.__setitem__("storage_root", path))
         QMessageBox.information(self, "Kairos", f"Storage set to {path}")
         super().accept()
 
@@ -370,14 +379,12 @@ class MiroFishDialog(QDialog):
         layout.addRow(buttons)
 
     def accept(self):
-        cfg = self.engine.config
-        mirofish = cfg.setdefault("mirofish", {})
-        mirofish["enabled"] = self.enabled_check.isChecked()
-        mirofish["base_url"] = self.base_url_edit.text().strip() or "http://localhost:5001"
-        mirofish["zep_api_key"] = self.zep_key_edit.text().strip() or None
-        from kairos.config import save_config
-        save_config(cfg)
-        self.engine.config = cfg
+        def _apply(c):
+            m = c.setdefault("mirofish", {})
+            m["enabled"] = self.enabled_check.isChecked()
+            m["base_url"] = self.base_url_edit.text().strip() or "http://localhost:5001"
+            m["zep_api_key"] = self.zep_key_edit.text().strip() or None
+        self.engine.config = _merge_save(_apply)
         QMessageBox.information(self, "Kairos", "MiroFish settings saved.")
         super().accept()
 
@@ -417,7 +424,6 @@ class EmailDialog(QDialog):
         layout.addRow(buttons)
 
     def accept(self):
-        cfg = self.engine.config
         email_cfg = {
             "email": self.email_edit.text().strip(),
             "password": self.password_edit.text(),
@@ -426,10 +432,7 @@ class EmailDialog(QDialog):
             "smtp_host": self.smtp_edit.text().strip(),
             "smtp_port": int(self.smtp_port.text() or 465),
         }
-        cfg["email"] = email_cfg
-        from kairos.config import save_config
-        save_config(cfg)
-        self.engine.config = cfg
+        self.engine.config = _merge_save(lambda c: c.__setitem__("email", email_cfg))
         self.engine.email = __import__("kairos.email_client", fromlist=["EmailClient"]).EmailClient()
         QMessageBox.information(self, "Kairos", "Email settings saved.")
         super().accept()
@@ -1376,12 +1379,11 @@ class KairosGUI(QMainWindow):
         self.update_btn.setEnabled(True)
         self._update_info = info
 
-        # Record the check time
-        cfg = self.engine.config
-        cfg.setdefault("update", {})["last_check"] = time.time()
+        # Record the check time (merge-safe: never clobber providers/settings)
         try:
-            from kairos.config import save_config
-            save_config(cfg)
+            self.engine.config = _merge_save(
+                lambda c: c.setdefault("update", {}).__setitem__("last_check", time.time())
+            )
         except Exception:
             pass
 
@@ -1952,10 +1954,9 @@ class KairosGUI(QMainWindow):
             QMessageBox.warning(self, "Council", "Need at least two providers configured for council mode.")
             return
         try:
-            from kairos.config import save_config
-            cfg = self.engine.config
-            cfg.setdefault("council", {})["members"] = members
-            save_config(cfg)
+            self.engine.config = _merge_save(
+                lambda c: c.setdefault("council", {}).__setitem__("members", members)
+            )
         except Exception:
             pass
         self._append_bubble("You", text, "user", "#58a6ff")
@@ -2121,6 +2122,8 @@ class KairosGUI(QMainWindow):
     def open_provider_dialog(self):
         ProviderDialog(self.engine, self).exec()
         self.engine.reload_llm()
+        from kairos.config import load_config
+        self.engine.config = load_config()
         self.refresh_status_bar()
         self.refresh_council_members()
 
