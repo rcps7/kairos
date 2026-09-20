@@ -36,10 +36,16 @@ class Council:
         self.engine = engine
 
     # ---- helpers ----
-    def _call(self, member, system, user, images=None):
+    def _call(self, member, system, user, images=None, use_character=True):
         if images and self.engine.llm.is_vision(member):
-            return self.engine.llm.generate_with_images(user, images, system_prompt=system, provider_id=member)
-        return self.engine.ask_llm(user, provider_id=member, system_prompt=system)
+            return self.engine.generate_with_images(
+                user, images, system_prompt=system, provider_id=member,
+                use_character=use_character,
+            )
+        return self.engine.ask_llm(
+            user, provider_id=member, system_prompt=system,
+            use_character=use_character,
+        )
 
     def _emit(self, progress, text):
         logger.info("[council] %s", text)
@@ -74,7 +80,7 @@ class Council:
                 f"Council members: {', '.join(members)}."
             )
             try:
-                raw = self._call(m, system, task, image_paths)
+                raw = self._call(m, system, task, image_paths, use_character=False)
             except Exception as e:
                 raw = f'{{"role":"generalist","confidence":0,"approach":"error: {e}","vote":"{members[0]}"}}'
             data = _strip_json(raw) or {"role": "generalist", "confidence": 0, "approach": raw[:200], "vote": members[0]}
@@ -108,7 +114,7 @@ class Council:
             "Create 2-4 subtasks covering the whole task."
         )
         try:
-            raw = self._call(primary, div_system, div_user, image_paths)
+            raw = self._call(primary, div_system, div_user, image_paths, use_character=False)
             plan = _strip_json(raw) or {}
         except Exception as e:
             plan = {}

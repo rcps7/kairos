@@ -52,6 +52,8 @@ class TelegramBot:
             self.app.add_handler(CommandHandler("remember", self.remember_command))
             self.app.add_handler(CommandHandler("memory", self.memory_command))
             self.app.add_handler(CommandHandler("predict", self.predict_command))
+            self.app.add_handler(CommandHandler("character", self.character_command))
+            self.app.add_handler(CommandHandler("setcharacter", self.setcharacter_command))
             self.app.add_handler(CommandHandler("kill", self.kill_command))
             self.app.add_handler(CallbackQueryHandler(self.button_handler))
 
@@ -77,6 +79,48 @@ class TelegramBot:
         if update.effective_chat:
             self._chat_ids.add(update.effective_chat.id)
 
+    def _capability_denied(self, capability: str):
+        """Return a refusal message if the active character lacks the capability."""
+        try:
+            if self.engine.can(capability):
+                return None
+        except Exception:
+            return None
+        prof = self.engine.characters.active()
+        return (
+            f"'{prof.get('name', 'The active character')}' is not permitted to "
+            f"use this capability ({capability.replace('_', ' ')})."
+        )
+
+    async def character_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        prof = self.engine.characters.active()
+        lines = [f"Active character: {prof.get('name', self.engine.active_character)}"]
+        if prof.get("description"):
+            lines.append(prof["description"])
+        lines.append("")
+        lines.append("Available characters:")
+        for p in self.engine.list_characters():
+            mark = "*" if p["id"] == self.engine.active_character else "-"
+            lines.append(f"{mark} {p['id']}  \u2014  {p['name']}")
+        lines.append("")
+        lines.append("Switch with: /setcharacter <id>")
+        await update.message.reply_text("\n".join(lines)[:3800])
+
+    async def setcharacter_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not context.args:
+            await update.message.reply_text("Usage: /setcharacter <id>")
+            return
+        cid = context.args[0].strip().lower()
+        try:
+            prof = await asyncio.to_thread(self.engine.set_character, cid)
+        except Exception as e:
+            await update.message.reply_text(f"Could not switch character: {e}")
+            return
+        msg = f"Now operating as: {prof.get('name', cid)}"
+        if prof.get("disclaimer"):
+            msg += f"\n\n{prof['disclaimer']}"
+        await update.message.reply_text(msg)
+
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         self._register_chat(update)
         await update.message.reply_text(
@@ -89,7 +133,9 @@ class TelegramBot:
             "/mail read - read email\n"
             "/expired - list items due for deletion\n"
             "/providers - list LLM providers\n"
-            "/setllm <id> - switch LLM"
+            "/setllm <id> - switch LLM\n"
+            "/character - show/switch agent character\n"
+            "/setcharacter <id> - activate a character"
         )
 
     async def chat_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -104,6 +150,10 @@ class TelegramBot:
             await update.message.reply_text(f"LLM error: {e}")
 
     async def search_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        denied = self._capability_denied("web_search")
+        if denied:
+            await update.message.reply_text(denied)
+            return
         query = " ".join(context.args)
         if not query:
             await update.message.reply_text("Usage: /search <query>")
@@ -124,6 +174,10 @@ class TelegramBot:
             await update.message.reply_text(f"Search error: {e}")
 
     async def learn_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        denied = self._capability_denied("learn_web")
+        if denied:
+            await update.message.reply_text(denied)
+            return
         if not context.args:
             await update.message.reply_text("Usage: /learn <url>")
             return
@@ -138,6 +192,10 @@ class TelegramBot:
             await update.message.reply_text(f"Learn error: {e}")
 
     async def download_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        denied = self._capability_denied("download_media")
+        if denied:
+            await update.message.reply_text(denied)
+            return
         if not context.args:
             await update.message.reply_text("Usage: /download <url>")
             return
@@ -160,6 +218,10 @@ class TelegramBot:
         await update.message.reply_text("\n".join(lines))
 
     async def run_skill_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        denied = self._capability_denied("skills_run")
+        if denied:
+            await update.message.reply_text(denied)
+            return
         if not context.args:
             await update.message.reply_text("Usage: /runs <skill_name>")
             return
@@ -171,6 +233,10 @@ class TelegramBot:
             await update.message.reply_text(f"Skill error: {e}")
 
     async def new_skill_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        denied = self._capability_denied("skills_manage")
+        if denied:
+            await update.message.reply_text(denied)
+            return
         if len(context.args) < 2:
             await update.message.reply_text("Usage: /newskill <name> <description>")
             return
@@ -188,6 +254,10 @@ class TelegramBot:
         )
 
     async def mail_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        denied = self._capability_denied("email_read")
+        if denied:
+            await update.message.reply_text(denied)
+            return
         try:
             messages = await asyncio.to_thread(self.engine.read_email, 5)
             if not messages:
@@ -201,6 +271,10 @@ class TelegramBot:
             await update.message.reply_text(f"Email error: {e}")
 
     async def send_mail_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        denied = self._capability_denied("email_send")
+        if denied:
+            await update.message.reply_text(denied)
+            return
         if len(context.args) < 2:
             await update.message.reply_text("Usage: /sendmail <to> <subject> | <body>")
             return
@@ -280,6 +354,10 @@ class TelegramBot:
         await update.message.reply_text("\n\n---\n\n".join(lessons)[:3800])
 
     async def ports_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        denied = self._capability_denied("peripherals")
+        if denied:
+            await update.message.reply_text(denied)
+            return
         try:
             ports = await asyncio.to_thread(self.engine.list_ports)
         except Exception as e:
@@ -295,6 +373,10 @@ class TelegramBot:
         await update.message.reply_text("\n".join(lines))
 
     async def open_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        denied = self._capability_denied("peripherals")
+        if denied:
+            await update.message.reply_text(denied)
+            return
         if not context.args:
             await update.message.reply_text("Usage: /open <port> [baud]")
             return
@@ -307,6 +389,10 @@ class TelegramBot:
             await update.message.reply_text(f"Open failed: {e}")
 
     async def send_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        denied = self._capability_denied("peripherals")
+        if denied:
+            await update.message.reply_text(denied)
+            return
         if len(context.args) < 2:
             await update.message.reply_text("Usage: /send <port> <text>")
             return
@@ -319,6 +405,10 @@ class TelegramBot:
             await update.message.reply_text(f"Send failed: {e}")
 
     async def read_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        denied = self._capability_denied("peripherals")
+        if denied:
+            await update.message.reply_text(denied)
+            return
         if not context.args:
             await update.message.reply_text("Usage: /read <port>")
             return
@@ -330,6 +420,10 @@ class TelegramBot:
             await update.message.reply_text(f"Read failed: {e}")
 
     async def close_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        denied = self._capability_denied("peripherals")
+        if denied:
+            await update.message.reply_text(denied)
+            return
         if not context.args:
             await update.message.reply_text("Usage: /close <port>")
             return
@@ -341,6 +435,10 @@ class TelegramBot:
             await update.message.reply_text(f"Close failed: {e}")
 
     async def remember_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        denied = self._capability_denied("memory")
+        if denied:
+            await update.message.reply_text(denied)
+            return
         content = " ".join(context.args)
         if not content:
             await update.message.reply_text("Usage: /remember <note or fact to save>")
@@ -352,6 +450,10 @@ class TelegramBot:
             await update.message.reply_text(f"Save failed: {e}")
 
     async def memory_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        denied = self._capability_denied("memory")
+        if denied:
+            await update.message.reply_text(denied)
+            return
         memories = self.engine.list_memories()
         if not memories:
             await update.message.reply_text("No retained data.")
@@ -362,6 +464,10 @@ class TelegramBot:
         await update.message.reply_text("\n".join(lines)[:3800])
 
     async def predict_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        denied = self._capability_denied("predict")
+        if denied:
+            await update.message.reply_text(denied)
+            return
         question = " ".join(context.args)
         if not question:
             await update.message.reply_text("Usage: /predict <question>\n(e.g. /predict how will this affect public opinion?)")
@@ -395,6 +501,10 @@ class TelegramBot:
         data = query.data
 
         if data in ("dl_mp3", "dl_mp4"):
+            denied = self._capability_denied("download_media")
+            if denied:
+                await query.edit_message_text(text=denied)
+                return
             fmt = "mp3" if data == "dl_mp3" else "mp4"
             url = context.user_data.get("pending_url")
             if not url:
@@ -408,6 +518,10 @@ class TelegramBot:
                 await query.edit_message_text(text=f"Download error: {e}")
 
         elif data == "approve_skill":
+            denied = self._capability_denied("skills_manage")
+            if denied:
+                await query.edit_message_text(text=denied)
+                return
             pending = context.user_data.get("pending_skill")
             if not pending:
                 await query.edit_message_text(text="No pending skill.")

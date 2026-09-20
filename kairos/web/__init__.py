@@ -108,7 +108,7 @@ class WebScraper:
         self.client.close()
 
 
-def summarize_with_llm(llm, text: str, max_chars: int = 6000) -> str:
+def summarize_with_llm(llm, text: str, max_chars: int = 6000, system_prompt: str = None) -> str:
     """Summarize text into clean, easy-to-learn bullet points using the LLM."""
     excerpt = text[:max_chars]
     prompt = (
@@ -116,4 +116,6 @@ def summarize_with_llm(llm, text: str, max_chars: int = 6000) -> str:
         "Use short, clear bullets (one key idea per bullet).\n\n"
         f"CONTENT:\n{excerpt}"
     )
+    if system_prompt:
+        return llm.generate(prompt, system_prompt=system_prompt)
     return llm.generate(prompt)

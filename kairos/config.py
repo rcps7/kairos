@@ -33,6 +33,10 @@ DEFAULT_CONFIG = {
     "council": {
         "members": [],
         "mode": "standard"
+    },
+    "active_character": "general",
+    "character": {
+        "dir_name": "AGENT_CHARACTER"
     }
 }
 

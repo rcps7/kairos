@@ -14,6 +14,7 @@ from PySide6.QtCore import Qt, Signal, QThread, QSize, QTimer
 from PySide6.QtGui import QAction, QFont, QColor, QPalette, QIcon, QTextCursor
 
 from kairos.gui.voice_widgets import VoiceWorker, SpeakWorker, VoiceMeter, MoodIndicator
+from kairos.characters_presets import ALL_CAPABILITIES, CAPABILITY_LABELS
 from kairos import updater
 
 # ---------------------------------------------------------------------------
@@ -72,7 +73,7 @@ class LLMWorker(QThread):
                     if images:
                         vis = [p for p in self.engine.list_providers() if self.engine.llm.is_vision(p)]
                         if vis:
-                            reply = self.engine.llm.generate_with_images(
+                            reply = self.engine.generate_with_images(
                                 prompt, images, provider_id=vis[0]
                             )
                             self.finished.emit(reply)
@@ -341,6 +342,10 @@ class StorageDialog(QDialog):
             QMessageBox.warning(self, "Kairos", "Please select a valid path.")
             return
         self.engine.config = _merge_save(lambda c: c.__setitem__("storage_root", path))
+        try:
+            self.engine.reload_characters()
+        except Exception:
+            pass
         QMessageBox.information(self, "Kairos", f"Storage set to {path}")
         super().accept()
 
@@ -741,6 +746,321 @@ class SkillDialog(QDialog):
             parent.refresh_status_bar()
 
 
+class CharacterDialog(QDialog):
+    """Manage agent characters: view, create, edit, duplicate, delete, activate."""
+
+    def __init__(self, engine, parent=None):
+        super().__init__(parent)
+        self.engine = engine
+        self.setWindowTitle("Agent Characters")
+        self.setStyleSheet(_dialog_style())
+        self.resize(900, 640)
+        self._current_id = None
+        self.build_ui()
+        self.refresh_list()
+
+    def build_ui(self):
+        layout = QHBoxLayout(self)
+
+        # --- Left: character list ---
+        left = QWidget()
+        left_layout = QVBoxLayout(left)
+        left_layout.addWidget(QLabel("Characters"))
+        self.char_list = QListWidget()
+        self.char_list.currentItemChanged.connect(self._on_select)
+        left_layout.addWidget(self.char_list, 1)
+
+        row = QHBoxLayout()
+        new_btn = QPushButton("New")
+        new_btn.clicked.connect(self._new)
+        dup_btn = QPushButton("Duplicate")
+        dup_btn.clicked.connect(self._duplicate)
+        self.active_btn = QPushButton("Set Active")
+        self.active_btn.setStyleSheet(
+            f"background-color: {GREEN_DIM}; color: {BG_DARK}; font-weight: bold;"
+        )
+        self.active_btn.clicked.connect(self._set_active)
+        row.addWidget(new_btn)
+        row.addWidget(dup_btn)
+        row.addWidget(self.active_btn)
+        left_layout.addLayout(row)
+        layout.addWidget(left, 1)
+
+        # --- Right: profile editor ---
+        right = QWidget()
+        right_layout = QVBoxLayout(right)
+
+        form = QFormLayout()
+        self.name_edit = QLineEdit()
+        self.icon_edit = QLineEdit()
+        self.icon_edit.setMaxLength(4)
+        self.desc_edit = QLineEdit()
+        form.addRow("Name:", self.name_edit)
+        form.addRow("Icon:", self.icon_edit)
+        form.addRow("Description:", self.desc_edit)
+        right_layout.addLayout(form)
+
+        self.builtin_label = QLabel("")
+        self.builtin_label.setStyleSheet(f"color: {TEXT_GREY}; font-style: italic;")
+        self.builtin_label.setWordWrap(True)
+        right_layout.addWidget(self.builtin_label)
+
+        right_layout.addWidget(QLabel("System prompt:"))
+        self.prompt_edit = QTextEdit()
+        self.prompt_edit.setFont(QFont("Consolas", 10))
+        right_layout.addWidget(self.prompt_edit, 3)
+
+        right_layout.addWidget(QLabel("Disclaimer (shown on switch, optional):"))
+        self.disclaimer_edit = QLineEdit()
+        right_layout.addWidget(self.disclaimer_edit)
+
+        self.all_caps_check = QCheckBox("All tools (no restriction)")
+        self.all_caps_check.toggled.connect(self._toggle_all_caps)
+        right_layout.addWidget(self.all_caps_check)
+
+        cap_box = QGroupBox("Allowed tools")
+        cap_grid = QGridLayout(cap_box)
+        self.cap_checks = {}
+        for i, cap in enumerate(ALL_CAPABILITIES):
+            chk = QCheckBox(CAPABILITY_LABELS.get(cap, cap))
+            self.cap_checks[cap] = chk
+            cap_grid.addWidget(chk, i // 2, i % 2)
+        right_layout.addWidget(cap_box)
+
+        right_layout.addWidget(QLabel("Allowed skills (comma-separated; blank = all):"))
+        self.skills_edit = QLineEdit()
+        right_layout.addWidget(self.skills_edit)
+
+        btn_row = QHBoxLayout()
+        self.save_btn = QPushButton("Save")
+        self.save_btn.clicked.connect(self._save)
+        self.delete_btn = QPushButton("Delete")
+        self.delete_btn.setStyleSheet(f"background-color: {RED}; color: white;")
+        self.delete_btn.clicked.connect(self._delete)
+        self.reset_btn = QPushButton("Restore Default")
+        self.reset_btn.clicked.connect(self._restore)
+        self.restore_all_btn = QPushButton("Restore All Defaults")
+        self.restore_all_btn.clicked.connect(self._restore_all)
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.accept)
+        btn_row.addWidget(self.save_btn)
+        btn_row.addWidget(self.delete_btn)
+        btn_row.addWidget(self.reset_btn)
+        btn_row.addWidget(self.restore_all_btn)
+        btn_row.addStretch()
+        btn_row.addWidget(close_btn)
+        right_layout.addLayout(btn_row)
+        layout.addWidget(right, 2)
+
+    # ---- list ----
+    def refresh_list(self):
+        self.char_list.blockSignals(True)
+        self.char_list.clear()
+        active_id = self.engine.active_character
+        for prof in self.engine.list_characters():
+            marker = "\u25CF " if prof["id"] == active_id else "   "
+            tag = "  [built-in]" if prof.get("builtin") else ""
+            item = QListWidgetItem(f"{marker}{prof.get('icon', '')} {prof['name']}{tag}")
+            item.setData(Qt.UserRole, prof["id"])
+            if prof["id"] == active_id:
+                f = item.font()
+                f.setBold(True)
+                item.setFont(f)
+            self.char_list.addItem(item)
+        self.char_list.blockSignals(False)
+        # Select active
+        for i in range(self.char_list.count()):
+            if self.char_list.item(i).data(Qt.UserRole) == active_id:
+                self.char_list.setCurrentRow(i)
+                break
+        if self.char_list.count() and self.char_list.currentRow() < 0:
+            self.char_list.setCurrentRow(0)
+
+    def _on_select(self, current, previous=None):
+        if not current:
+            return
+        cid = current.data(Qt.UserRole)
+        prof = self.engine.characters.get(cid)
+        if not prof:
+            return
+        self._current_id = cid
+        self._load(prof)
+
+    def _load(self, prof):
+        builtin = bool(prof.get("builtin"))
+        self.name_edit.setText(prof.get("name", ""))
+        self.icon_edit.setText(prof.get("icon", "") or "")
+        self.desc_edit.setText(prof.get("description", "") or "")
+        self.prompt_edit.setPlainText(prof.get("system_prompt", "") or "")
+        self.disclaimer_edit.setText(prof.get("disclaimer") or "")
+
+        caps = prof.get("capabilities")
+        self.all_caps_check.setChecked(caps is None)
+        for cap, chk in self.cap_checks.items():
+            chk.setChecked(caps is None or cap in caps)
+        self._toggle_all_caps(self.all_caps_check.isChecked())
+
+        skills = prof.get("skills")
+        self.skills_edit.setText("" if skills is None else ", ".join(skills))
+
+        if builtin:
+            self.builtin_label.setText(
+                "Built-in character (read-only). Use Duplicate to create an "
+                "editable copy."
+            )
+        else:
+            self.builtin_label.setText("Custom character.")
+
+        for w in (self.name_edit, self.icon_edit, self.desc_edit, self.prompt_edit,
+                  self.disclaimer_edit, self.all_caps_check, self.skills_edit):
+            w.setEnabled(not builtin)
+        for chk in self.cap_checks.values():
+            chk.setEnabled(not builtin and not self.all_caps_check.isChecked())
+        self.save_btn.setEnabled(not builtin)
+        self.delete_btn.setEnabled(not builtin)
+        self.reset_btn.setEnabled(builtin)
+
+    def _toggle_all_caps(self, checked):
+        for chk in self.cap_checks.values():
+            if checked:
+                chk.setChecked(True)
+            chk.setEnabled(not checked and self.name_edit.isEnabled())
+
+    def _collect(self):
+        caps = None
+        if not self.all_caps_check.isChecked():
+            caps = [c for c, chk in self.cap_checks.items() if chk.isChecked()]
+        skills_text = self.skills_edit.text().strip()
+        skills = None
+        if skills_text:
+            skills = [s.strip() for s in skills_text.split(",") if s.strip()]
+        return {
+            "id": self._current_id,
+            "name": self.name_edit.text().strip(),
+            "icon": self.icon_edit.text().strip(),
+            "description": self.desc_edit.text().strip(),
+            "system_prompt": self.prompt_edit.toPlainText().strip(),
+            "disclaimer": self.disclaimer_edit.text().strip() or None,
+            "capabilities": caps,
+            "skills": skills,
+        }
+
+    # ---- actions ----
+    def _new(self):
+        from PySide6.QtWidgets import QInputDialog
+        name, ok = QInputDialog.getText(self, "New Character", "Character name:")
+        if not ok or not name.strip():
+            return
+        description, ok2 = QInputDialog.getText(
+            self, "New Character", "Short description (optional):"
+        )
+        if not ok2:
+            description = ""
+        try:
+            prof = self.engine.create_character(name.strip(), description.strip())
+        except Exception as e:
+            QMessageBox.warning(self, "Kairos", f"Create failed: {e}")
+            return
+        self.refresh_list()
+        self._select_id(prof["id"])
+
+    def _duplicate(self):
+        if not self._current_id:
+            return
+        try:
+            prof = self.engine.duplicate_character(self._current_id)
+        except Exception as e:
+            QMessageBox.warning(self, "Kairos", f"Duplicate failed: {e}")
+            return
+        self.refresh_list()
+        self._select_id(prof["id"])
+
+    def _select_id(self, cid):
+        for i in range(self.char_list.count()):
+            if self.char_list.item(i).data(Qt.UserRole) == cid:
+                self.char_list.setCurrentRow(i)
+                return
+
+    def _save(self):
+        if not self._current_id:
+            return
+        profile = self._collect()
+        if not profile["name"] or not profile["system_prompt"]:
+            QMessageBox.warning(self, "Kairos", "Name and system prompt are required.")
+            return
+        try:
+            self.engine.save_character(profile)
+        except Exception as e:
+            QMessageBox.warning(self, "Kairos", f"Save failed: {e}")
+            return
+        self.refresh_list()
+        self._select_id(profile["id"])
+
+    def _delete(self):
+        if not self._current_id:
+            return
+        prof = self.engine.characters.get(self._current_id)
+        if not prof or prof.get("builtin"):
+            return
+        confirm = QMessageBox.question(
+            self, "Delete Character",
+            f"Delete character '{prof['name']}' permanently?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        if confirm != QMessageBox.Yes:
+            return
+        try:
+            self.engine.delete_character(self._current_id)
+        except Exception as e:
+            QMessageBox.warning(self, "Kairos", f"Delete failed: {e}")
+            return
+        self.refresh_list()
+
+    def _set_active(self):
+        if not self._current_id:
+            return
+        try:
+            self.engine.set_character(self._current_id)
+        except Exception as e:
+            QMessageBox.warning(self, "Kairos", f"Activate failed: {e}")
+            return
+        self.refresh_list()
+
+    def _restore(self):
+        if not self._current_id:
+            return
+        confirm = QMessageBox.question(
+            self, "Restore Default",
+            "Overwrite this built-in character with the packaged default?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        if confirm != QMessageBox.Yes:
+            return
+        try:
+            self.engine.reset_character(self._current_id)
+        except Exception as e:
+            QMessageBox.warning(self, "Kairos", f"Restore failed: {e}")
+            return
+        self.refresh_list()
+        self._select_id(self._current_id)
+
+    def _restore_all(self):
+        confirm = QMessageBox.question(
+            self, "Restore All Defaults",
+            "Reset every built-in character to its packaged default?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        if confirm != QMessageBox.Yes:
+            return
+        try:
+            self.engine.restore_default_characters()
+        except Exception as e:
+            QMessageBox.warning(self, "Kairos", f"Restore failed: {e}")
+            return
+        self.refresh_list()
+        self._select_id(self._current_id)
+
+
 class PredictWorker(QThread):
     finished = Signal(dict)
     error = Signal(str)
@@ -953,7 +1273,13 @@ class RetentionDialog(QDialog):
 
     def _refresh_memories(self):
         self.mem_list.clear()
-        for mem_id, content, created in self.engine.list_memories():
+        try:
+            memories = self.engine.list_memories()
+        except Exception as e:
+            self.add_edit.setEnabled(False)
+            self.mem_list.addItem(f"Unavailable: {e}")
+            return
+        for mem_id, content, created in memories:
             qitem = QListWidgetItem(content[:120])
             qitem.setData(Qt.UserRole, mem_id)
             qitem.setToolTip(content)
@@ -1291,6 +1617,8 @@ class KairosGUI(QMainWindow):
 
         self.setCentralWidget(splitter)
 
+        self._apply_character_capabilities()
+
         # Check for updates (at most once per day).
         QTimer.singleShot(1500, self.maybe_auto_check_updates)
 
@@ -1316,9 +1644,11 @@ class KairosGUI(QMainWindow):
         edit_menu.addAction("MiroFish Settings", self.open_mirofish_dialog)
         edit_menu.addSeparator()
         edit_menu.addAction("Peripheral Control", self.open_peripheral_dialog)
+        self._peripheral_action = edit_menu.actions()[-1]
         edit_menu.addAction("Retention (Delete Expired)", self.open_retention_dialog)
         edit_menu.addSeparator()
-        edit_menu.addAction("Skills", self.open_skill_dialog)
+        self._skills_action = edit_menu.addAction("Skills", self.open_skill_dialog)
+        edit_menu.addAction("Agent Character\u2026", self.open_character_dialog)
 
         tools_menu = menubar.addMenu("&Tools")
         tools_menu.addAction("Predictive Engine", self.open_predict_dialog)
@@ -1460,19 +1790,22 @@ class KairosGUI(QMainWindow):
         self.addToolBar(toolbar)
 
         actions = [
-            ("Search", self._tool_search),
-            ("Learn URL", self._tool_learn),
-            ("Download", self._tool_download),
-            ("Predict", self.open_predict_dialog),
-            ("Skills", self.open_skill_dialog),
-            ("Providers", self.open_provider_dialog),
-            ("Peripherals", self.open_peripheral_dialog),
-            ("Self-Reflect", self.run_reflection),
+            ("Search", "web_search", self._tool_search),
+            ("Learn URL", "learn_web", self._tool_learn),
+            ("Download", "download_media", self._tool_download),
+            ("Predict", "predict", self.open_predict_dialog),
+            ("Skills", "skills_manage", self.open_skill_dialog),
+            ("Providers", None, self.open_provider_dialog),
+            ("Peripherals", "peripherals", self.open_peripheral_dialog),
+            ("Character", None, self.open_character_dialog),
+            ("Self-Reflect", None, self.run_reflection),
         ]
-        for label, handler in actions:
+        self._toolbar_buttons = {}
+        for label, capability, handler in actions:
             btn = QPushButton(label)
             btn.clicked.connect(handler)
             toolbar.addWidget(btn)
+            self._toolbar_buttons[label] = (btn, capability)
 
     # ------------------------------------------------------------------
     # Panels
@@ -1499,7 +1832,18 @@ class KairosGUI(QMainWindow):
             "Create / View Skills",
         ])
         self.skills_list.itemClicked.connect(self._on_skill_clicked)
+        self.skills_list.setToolTip("Tools available to the active character")
         layout.addWidget(self.skills_list)
+        self._left_cap_map = {
+            "Web Search": "web_search",
+            "Learn From Page": "learn_web",
+            "Email": "email_read",
+            "Downloads": "download_media",
+            "Peripheral Control": "peripherals",
+            "Predictive Engine": "predict",
+            "Self-Reflect": None,
+            "Create / View Skills": "skills_manage",
+        }
 
         # --- Custom skills as clickable buttons ---
         custom_title = QLabel("MY SKILLS")
@@ -1539,14 +1883,20 @@ class KairosGUI(QMainWindow):
 
         for skill in skills:
             name = skill["name"]
+            try:
+                ok = self.engine.can("skills_run") and self.engine.characters.allows_skill(name)
+            except Exception:
+                ok = True
             btn = QPushButton(name)
-            btn.setToolTip(skill.get("description", name))
+            btn.setToolTip(skill.get("description", name) if ok else "Not available for the active character")
+            btn.setEnabled(ok)
             btn.setStyleSheet(
                 f"QPushButton {{ background-color: {BG_BUTTON}; color: {TEXT}; "
                 f"border: 1px solid {BORDER}; border-radius: 4px; padding: 6px 8px; "
                 f"text-align: left; font-family: 'Segoe UI', sans-serif; }}"
                 f"QPushButton:hover {{ background-color: {BG_BUTTON_HOVER}; color: {GREEN}; }}"
                 f"QPushButton:pressed {{ background-color: {GREEN_DIM}; color: {BG_DARK}; }}"
+                f"QPushButton:disabled {{ color: {TEXT_GREY}; }}"
             )
             btn.clicked.connect(lambda checked=False, n=name: self._run_skill_button(n))
             btn.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -1604,9 +1954,13 @@ class KairosGUI(QMainWindow):
         title.setStyleSheet(f"color: {GREEN}; font-weight: bold; font-family: 'Consolas', monospace;")
         self.active_llm_label = QLabel("")
         self.active_llm_label.setStyleSheet(f"color: {TEXT_GREY}; font-family: 'Segoe UI', sans-serif;")
+        self.character_label = QLabel("")
+        self.character_label.setStyleSheet(f"color: {GREEN}; font-family: 'Segoe UI', sans-serif;")
         self.mood = MoodIndicator()
         header.addWidget(title)
         header.addStretch()
+        header.addWidget(self.character_label)
+        header.addSpacing(12)
         header.addWidget(self.active_llm_label)
         header.addSpacing(12)
         header.addWidget(self.mood)
@@ -1757,6 +2111,9 @@ class KairosGUI(QMainWindow):
         self.status_storage.setStyleSheet(f"color: {TEXT_GREY};")
         self.status_skills = QLabel("-")
         self.status_skills.setStyleSheet(f"color: {TEXT_GREY};")
+        self.status_character = QLabel("-")
+        self.status_character.setStyleSheet(f"color: {GREEN};")
+        info_layout.addRow("Character:", self.status_character)
         info_layout.addRow("LLM:", self.status_llm)
         info_layout.addRow("Skills:", self.status_skills)
         info_layout.addRow("Storage:", self.status_storage)
@@ -1804,12 +2161,61 @@ class KairosGUI(QMainWindow):
             active = self.engine.llm.active_provider
             skills = len(self.engine.list_skills())
             storage = self.engine.config.get("storage_root", "-")
+            prof = self.engine.characters.active()
+            char_name = prof.get("name", "General")
             self.status_llm.setText(str(active))
             self.status_skills.setText(str(skills))
             self.status_storage.setText(str(storage))
+            self.status_character.setText(char_name)
             self.active_llm_label.setText(f"LLM: {active}")
+            self.character_label.setText(f"Character: {char_name}")
         except Exception:
             pass
+
+    def _apply_character_capabilities(self):
+        """Enable/disable available tools to match the active character."""
+        try:
+            caps = self.engine.character_capabilities()
+        except Exception:
+            caps = None
+
+        def allowed(cap):
+            return cap is None or caps is None or cap in caps
+
+        # Toolbar
+        for label, (btn, cap) in getattr(self, "_toolbar_buttons", {}).items():
+            ok = allowed(cap)
+            btn.setEnabled(ok)
+            btn.setToolTip("" if ok else "Not available for the active character")
+
+        # Left panel tool list
+        for i in range(self.skills_list.count()):
+            item = self.skills_list.item(i)
+            cap = self._left_cap_map.get(item.text())
+            ok = allowed(cap)
+            if ok:
+                item.setFlags(item.flags() | Qt.ItemIsEnabled)
+            else:
+                item.setFlags(item.flags() & ~Qt.ItemIsEnabled)
+
+        # Council checkbox
+        try:
+            self.council_check.setEnabled(allowed("council"))
+        except Exception:
+            pass
+
+        # Menu actions
+        try:
+            self._skills_action.setEnabled(allowed("skills_manage"))
+        except Exception:
+            pass
+        try:
+            self._peripheral_action.setEnabled(allowed("peripherals"))
+        except Exception:
+            pass
+
+        # Custom skill buttons
+        self.refresh_skill_buttons()
 
     # ------------------------------------------------------------------
     # Toolbar / skill handlers
@@ -2130,6 +2536,7 @@ class KairosGUI(QMainWindow):
     def open_storage_dialog(self):
         StorageDialog(self.engine, self).exec()
         self.refresh_status_bar()
+        self._apply_character_capabilities()
 
     def open_email_dialog(self):
         EmailDialog(self.engine, self).exec()
@@ -2150,6 +2557,21 @@ class KairosGUI(QMainWindow):
         SkillDialog(self.engine, self).exec()
         self.refresh_status_bar()
         self.refresh_skill_buttons()
+
+    def open_character_dialog(self):
+        before = self.engine.active_character
+        CharacterDialog(self.engine, self).exec()
+        from kairos.config import load_config
+        self.engine.config = load_config()
+        self.engine.active_character = self.engine.characters.active_id
+        self.refresh_status_bar()
+        self._apply_character_capabilities()
+        if self.engine.active_character != before:
+            prof = self.engine.characters.active()
+            msg = f"Now operating as: {prof.get('name', self.engine.active_character)}"
+            if prof.get("disclaimer"):
+                msg += f"\n\n{prof['disclaimer']}"
+            self._append_bubble("Character", msg, "system", GREEN)
 
     def run_reflection(self):
         self._pending_kairos_bubble = self._append_bubble("Kairos", "Reflecting on recent errors ...", "kairos", GREEN)

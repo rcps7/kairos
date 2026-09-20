@@ -21,19 +21,20 @@ Licensed under the **PolyForm Noncommercial License 1.0.0** (free for personal/n
 7. [Telegram Commands](#telegram-commands)
 8. [LLM Providers (multi-provider)](#llm-providers-multi-provider)
 9. [Skills — Creating & Managing](#skills--creating--managing)
-10. [Knowledge Library & Media Storage](#knowledge-library--media-storage)
-11. [Data Retention & Deletion](#data-retention--deletion)
-12. [Email](#email)
-13. [Peripheral Control (Serial USB)](#peripheral-control-serial-usb)
-14. [Watchdog & Kill Switch](#watchdog--kill-switch)
-15. [Self-Improvement & Learning](#self-improvement--learning)
-16. [Configuration File](#configuration-file)
-17. [Project Structure](#project-structure)
-18. [Creating a Distributable ZIP](#creating-a-distributable-zip)
-19. [Uploading to GitHub (what NOT to commit)](#uploading-to-github-what-not-to-commit)
-20. [Troubleshooting](#troubleshooting)
-21. [License](#license)
-22. [Contributing](#contributing)
+10. [Agent Characters](#agent-characters)
+11. [Knowledge Library & Media Storage](#knowledge-library--media-storage)
+12. [Data Retention & Deletion](#data-retention--deletion)
+13. [Email](#email)
+14. [Peripheral Control (Serial USB)](#peripheral-control-serial-usb)
+15. [Watchdog & Kill Switch](#watchdog--kill-switch)
+16. [Self-Improvement & Learning](#self-improvement--learning)
+17. [Configuration File](#configuration-file)
+18. [Project Structure](#project-structure)
+19. [Creating a Distributable ZIP](#creating-a-distributable-zip)
+20. [Uploading to GitHub (what NOT to commit)](#uploading-to-github-what-not-to-commit)
+21. [Troubleshooting](#troubleshooting)
+22. [License](#license)
+23. [Contributing](#contributing)
 
 ---
 
@@ -48,6 +49,7 @@ Licensed under the **PolyForm Noncommercial License 1.0.0** (free for personal/n
 | Email read / write / send (on request only) | GUI / Telegram |
 | Serial peripheral control (ESP32 / Arduino / RPi) | GUI / Telegram |
 | Multi-provider LLM (Moonshot/Kimi, DeepSeek, OpenAI, any OpenAI-style API) | GUI / Telegram |
+| Agent Characters — selectable personas with per-character tool access | GUI / Telegram |
 | Skill system — create, view, edit, run, delete skills | GUI / Telegram |
 | Self-improvement — records errors, reflects, stores lessons | GUI / Telegram |
 | Watchdog with kill switch + heartbeat monitoring | `kill.bat`, GUI, Telegram `/kill` |
@@ -147,10 +149,10 @@ buttons**, and is divided into three panes:
 - **Center pane** — the chat console. Type instructions directly; responses appear
   here. Search results are numbered with clickable links. A **Clear** button empties
   only the visible chat (storage and memory are untouched).
-- **Right pane** — system status (active LLM, skill count, storage path), quick-action
-  buttons, and the red **KILL SWITCH** button.
+- **Right pane** — system status (active character, active LLM, skill count, storage
+  path), quick-action buttons, and the red **KILL SWITCH** button.
 - **Toolbar** — Search, Learn URL, Download, Skills, Providers, Peripherals,
-  Self-Reflect.
+  Character, Self-Reflect. Tools the active character may not use are greyed out.
 
 ### Voice & mood
 
@@ -172,7 +174,7 @@ buttons**, and is divided into three panes:
 | Menu | Actions |
 |------|---------|
 | **File** | New Session (`Ctrl+N`), Exit, Kill Switch (Emergency) |
-| **Edit** | LLM Providers, Storage Settings, Email Settings, Peripheral Control, Retention (Delete Expired), Skills |
+| **Edit** | LLM Providers, Storage Settings, Email Settings, Peripheral Control, Retention (Delete Expired), Skills, Agent Character… |
 | **View** | Self-Reflect, Show Lessons, Refresh Status |
 | **Window** | Minimize, Maximize |
 | **Help** | About Kairos |
@@ -198,6 +200,8 @@ buttons**, and is divided into three panes:
 | `/memory` | List retained data |
 | `/providers` | List LLM providers |
 | `/setllm <id>` | Switch active LLM provider |
+| `/character` | Show the active character and list all characters |
+| `/setcharacter <id>` | Switch the active agent character |
 | `/reflect` | Analyze recent errors and store a lesson |
 | `/lessons` | Show lessons learned |
 | `/ports` | List serial ports |
@@ -292,6 +296,80 @@ removed and the skill is unloaded from memory.
 
 ---
 
+## Agent Characters
+
+An **Agent Character** is a selectable persona that controls *how* KAIROS behaves.
+Exactly one character is active at a time, and every user-facing LLM call (chat,
+web summaries, learned pages, predictions, and the council's final answer) is
+made **under that character's system prompt**. Selecting **General** gives the
+original all-purpose behavior.
+
+### Built-in characters
+
+Shipped with KAIROS and seeded on first run:
+
+| Character | Purpose |
+|-----------|---------|
+| General | All-purpose agent with full tool access |
+| Medical Assistant | Evidence-based medical answers with inline citations |
+| Law Assist | Jurisdiction-aware legal research with source links |
+| Electronic Specialist | Circuit/PCB design and embedded firmware |
+| Astrophysics Expert | Astrophysics & cosmology, LaTeX math, telescope citations |
+| Quantum Physics Expert | Quantum mechanics/computing & particle physics |
+| Genetics Expert | Genomics/bioinformatics with bioethical safeguards |
+| AI Expert | ML research, architectures, and cited SOTA benchmarks |
+
+Built-in characters are **read-only** (they cannot be edited or deleted). You can
+**Duplicate** one to create an editable copy, or **Restore Defaults** to reset a
+damaged built-in to its packaged version.
+
+### Custom characters
+
+Add, edit, and delete your own characters freely:
+
+- **GUI:** `Edit → Agent Character…` (or the toolbar **Character** button) →
+  **New** / **Duplicate** / **Save** / **Delete** / **Set Active**.
+- **Telegram:** `/character` (list + active) and `/setcharacter <id>` (switch).
+
+Each profile defines a name, icon, description, system prompt, an optional
+disclaimer (shown when you switch), and **which tools it may use** (web search,
+learn page, downloads, email, peripherals, predict, council, skills, memory).
+Tools the active character is not allowed to use are disabled in the GUI and
+refused over Telegram.
+
+### Storage layout
+
+Profiles are plain JSON, one folder per character:
+
+```
+<storage_root>/Kairos/AGENT_CHARACTER/<character_id>/character.json
+```
+
+The active character id is saved in `%USERPROFILE%\.kairos\config.json` as
+`active_character`.
+
+### Example profile
+
+```json
+{
+  "id": "medical_assistant",
+  "name": "Medical Assistant",
+  "icon": "\ud83e\ude7a",
+  "description": "Evidence-based medical AI with inline citations.",
+  "system_prompt": "You are KAIROS operating as a specialized Medical Assistant...",
+  "disclaimer": "General medical information only — not a diagnosis or prescription.",
+  "capabilities": ["web_search", "learn_web", "memory", "predict", "council", "skills_run"],
+  "skills": null,
+  "builtin": true,
+  "version": 1
+}
+```
+
+`"capabilities": null` means *all tools allowed*. `"skills": null` means *all
+skills allowed*; otherwise it is a whitelist of skill names.
+
+---
+
 ## Knowledge Library & Media Storage
 
 ### Storage location
@@ -300,9 +378,10 @@ By default, data is stored under `%USERPROFILE%\KairosData\`. You can change the
 drive/folder via **`Edit → Storage Settings`** in the GUI. All writes go to:
 
 ```
-<storage_root>/Kairos/Knowledge/   (SQLite + vector index metadata)
-<storage_root>/Kairos/Media/       (downloaded audio/video)
-<storage_root>/Kairos/Skills/      (skill source files)
+<storage_root>/Kairos/Knowledge/        (SQLite + vector index metadata)
+<storage_root>/Kairos/Media/            (downloaded audio/video)
+<storage_root>/Kairos/Skills/           (skill source files)
+<storage_root>/Kairos/AGENT_CHARACTER/  (agent character profiles)
 ```
 
 ### Knowledge library
@@ -526,7 +605,11 @@ Location: `%USERPROFILE%\.kairos\config.json`
   "peripherals": {
     "default_baud": 115200
   },
-  "retention_days": 30
+  "retention_days": 30,
+  "active_character": "general",
+  "character": {
+    "dir_name": "AGENT_CHARACTER"
+  }
 }
 ```
 
@@ -534,6 +617,8 @@ Location: `%USERPROFILE%\.kairos\config.json`
 - `storage_root` — drive/folder for knowledge, media, and skills.
 - `retention_days` — data older than this is flagged for deletion.
 - `active_llm` — currently selected provider.
+- `active_character` — id of the active Agent Character (see [Agent Characters](#agent-characters)).
+- `character.dir_name` — folder under `<storage_root>/Kairos/` holding character profiles.
 
 ---
 
@@ -544,6 +629,8 @@ kairos/
 ├── kairos/                     # main package
 │   ├── main.py                 # KairosEngine + entry point
 │   ├── config.py               # config + keyring secrets
+│   ├── characters.py           # Agent Character manager
+│   ├── characters_presets.py   # built-in character presets
 │   ├── watchdog.py             # watchdog / kill switch
 │   ├── telegram_bot.py         # Telegram interface
 │   ├── media_downloader.py     # yt-dlp MP3/MP4

@@ -119,6 +119,6 @@ def reflect(engine, limit: int = 8) -> str:
         "4) FORECASTING NOTES - how to improve future predictions (if predictions are present)\n\n"
         "ERRORS:\n" + "\n".join(lines) + prediction_context
     )
-    analysis = engine.ask_llm(prompt)
+    analysis = engine.ask_llm(prompt, use_character=False)
     engine.learning.add_lesson(analysis)
     return analysis

@@ -12,6 +12,8 @@ from PySide6.QtWidgets import (
 )
 
 from kairos.config import load_config, save_config
+from kairos.characters import CharacterManager
+from kairos.characters_presets import GENERAL_PROMPT
 from kairos.council import Council
 from kairos.email_client import EmailClient
 from kairos.gui.main_window import KairosGUI
@@ -40,6 +42,12 @@ HEARTBEAT_INTERVAL_SECONDS = 5
 class KairosEngine:
     def __init__(self):
         self.config = load_config()
+        self.characters = CharacterManager(
+            self.config.get("storage_root", ""),
+            active_id=self.config.get("active_character", "general"),
+            dir_name=self.config.get("character", {}).get("dir_name", "AGENT_CHARACTER"),
+        )
+        self.active_character = self.characters.active_id
         self.llm = LLMClient()
         self.peripherals = SerialManager(
             default_baud=self.config["peripherals"]["default_baud"]
@@ -110,14 +118,98 @@ class KairosEngine:
         self.llm = LLMClient()
 
     # ---- LLM ----
-    def ask_llm(self, prompt: str, provider_id: str = None, system_prompt: str = None) -> str:
+    def ask_llm(self, prompt: str, provider_id: str = None, system_prompt: str = None,
+                use_character: bool = True) -> str:
         try:
+            if use_character:
+                system_prompt = self.current_system_prompt(system_prompt)
             if system_prompt:
                 return self.llm.generate(prompt, system_prompt=system_prompt, provider_id=provider_id)
             return self.llm.generate(prompt, provider_id=provider_id)
         except Exception as e:
             self.record_error("llm.generate", e)
             raise
+
+    def generate_with_images(self, prompt: str, image_paths, provider_id: str = None,
+                             system_prompt: str = None, use_character: bool = True) -> str:
+        """Vision call that respects the active agent character."""
+        if use_character:
+            system_prompt = self.current_system_prompt(system_prompt)
+        if not system_prompt:
+            system_prompt = "You are a helpful assistant."
+        return self.llm.generate_with_images(
+            prompt, image_paths, system_prompt=system_prompt, provider_id=provider_id
+        )
+
+    # ---- Agent Characters ----
+    def current_system_prompt(self, extra: str = None) -> str:
+        """Return the active character's system prompt, optionally merged with a task instruction."""
+        base = self.characters.active().get("system_prompt") or GENERAL_PROMPT
+        if extra:
+            return f"{base}\n\n{extra}"
+        return base
+
+    def character_capabilities(self) -> list:
+        return self.characters.capabilities()
+
+    def can(self, capability: str) -> bool:
+        return self.characters.can(capability)
+
+    def require(self, capability: str) -> None:
+        """Raise PermissionError if the active character lacks a capability."""
+        if not self.can(capability):
+            name = self.characters.active().get("name", "This character")
+            label = capability.replace("_", " ")
+            raise PermissionError(
+                f"'{name}' is not permitted to use the {label} capability. "
+                "Switch character or edit the profile to allow it."
+            )
+
+    def list_characters(self) -> list:
+        return self.characters.list()
+
+    def active_character_profile(self) -> dict:
+        return self.characters.active()
+
+    def set_character(self, char_id: str) -> dict:
+        prof = self.characters.set_active(char_id)
+        cfg = load_config()
+        cfg["active_character"] = prof["id"]
+        save_config(cfg)
+        self.config = load_config()
+        self.active_character = prof["id"]
+        return prof
+
+    def reload_characters(self) -> list:
+        """Re-point character storage (e.g. after the storage root changes)."""
+        self.characters.dir_name = self.config.get("character", {}).get(
+            "dir_name", "AGENT_CHARACTER"
+        )
+        self.characters.set_root(self.config.get("storage_root", ""))
+        self.active_character = self.characters.active_id
+        return self.characters.list()
+
+    def create_character(self, name: str, description: str = "", system_prompt: str = None,
+                         icon: str = "", disclaimer: str = None, capabilities=None,
+                         skills=None) -> dict:
+        return self.characters.create(
+            name, description, system_prompt, icon, disclaimer, capabilities, skills
+        )
+
+    def save_character(self, profile: dict) -> dict:
+        return self.characters.save(profile)
+
+    def delete_character(self, char_id: str) -> str:
+        return self.characters.delete(char_id)
+
+    def duplicate_character(self, char_id: str) -> dict:
+        return self.characters.duplicate(char_id)
+
+    def reset_character(self, char_id: str) -> dict:
+        return self.characters.reset_builtin(char_id)
+
+    def restore_default_characters(self) -> list:
+        return self.characters.restore_defaults()
 
     def chat_with_recall(self, prompt: str) -> str:
         """Answer a user message, injecting related retained data as context."""
@@ -129,8 +221,8 @@ class KairosEngine:
                     context_lines.append(f"- {item['text'][:400]}")
                 context = "\n".join(context_lines)
                 full_prompt = (
-                    "You are KAIROS. Use the following related information from the "
-                    "user's retained knowledge/memory if it helps answer the question.\n\n"
+                    "Use the following related information from the user's "
+                    "retained knowledge/memory if it helps answer the question.\n\n"
                     f"RELATED INFORMATION:\n{context}\n\n"
                     f"USER QUESTION: {prompt}"
                 )
@@ -154,6 +246,7 @@ class KairosEngine:
     def council(self, prompt: str, members=None, attachment_paths=None,
                 mode: str = "standard", progress=None) -> dict:
         """Run the multi-LLM council on a task."""
+        self.require("council")
         try:
             context, images = ("", [])
             if attachment_paths:
@@ -178,6 +271,7 @@ class KairosEngine:
 
     # ---- Web ----
     def search_web(self, query: str, max_results: int = 10) -> list:
+        self.require("web_search")
         try:
             return self.web_search.search(query, max_results=max_results)
         except Exception as e:
@@ -192,9 +286,12 @@ class KairosEngine:
             raise
 
     def learn_from_page(self, url: str) -> dict:
+        self.require("learn_web")
         try:
             data = self.web_scrape.fetch(url)
-            summary = summarize_with_llm(self.llm, data["text"])
+            summary = summarize_with_llm(
+                self.llm, data["text"], system_prompt=self.current_system_prompt()
+            )
             import uuid
             doc_id = uuid.uuid4().hex
             self.knowledge.add_document(doc_id, url, data["html"], data["text"], summary)
@@ -205,6 +302,7 @@ class KairosEngine:
 
     # ---- Media ----
     def download_media(self, url: str, fmt: str = "mp4") -> dict:
+        self.require("download_media")
         try:
             return self.downloader.download(url, fmt)
         except Exception as e:
@@ -216,10 +314,18 @@ class KairosEngine:
         return self.skills.list_skills()
 
     def run_skill(self, name: str, **kwargs):
+        self.require("skills_run")
+        if not self.characters.allows_skill(name):
+            prof = self.characters.active()
+            raise PermissionError(
+                f"Skill '{name}' is not available to the "
+                f"'{prof.get('name', 'current')}' character."
+            )
         return self.skills.run_skill(name, self, **kwargs)
 
     def generate_skill(self, name: str, description: str) -> str:
         """Generate a working skill using the LLM. Falls back to a stub on failure."""
+        self.require("skills_manage")
         try:
             return self._llm_generate_skill(name, description)
         except Exception as e:
@@ -248,7 +354,7 @@ class KairosEngine:
             "- Do not import Kairos modules other than `kairos.skills.base`.\n"
             "Output the code now."
         )
-        code = self.ask_llm(user, system_prompt=system)
+        code = self.ask_llm(user, system_prompt=system, use_character=False)
         code = self._strip_code_fences(code)
         if "def run" not in code or "class " not in code:
             raise RuntimeError("LLM returned invalid skill code.")
@@ -266,24 +372,30 @@ class KairosEngine:
         return code.strip()
 
     def create_skill(self, name: str, description: str, code: str) -> str:
+        self.require("skills_manage")
         path = self.skills.create_skill(name, description, code)
         return str(path)
 
     def delete_skill(self, name: str) -> str:
+        self.require("skills_manage")
         return self.skills.delete_skill(name)
 
     # ---- Email ----
     def read_email(self, limit: int = 10) -> list:
+        self.require("email_read")
         return self.email.read_mail(limit)
 
     def send_email(self, to: str, subject: str, body: str) -> bool:
+        self.require("email_send")
         return self.email.send_mail(to, subject, body)
 
     # ---- Peripherals ----
     def list_ports(self) -> list:
+        self.require("peripherals")
         return self.peripherals.list_ports()
 
     def open_port(self, device: str, baudrate: int = None) -> None:
+        self.require("peripherals")
         try:
             self.peripherals.open(device, baudrate)
         except Exception as e:
@@ -291,9 +403,11 @@ class KairosEngine:
             raise
 
     def close_port(self, device: str) -> None:
+        self.require("peripherals")
         self.peripherals.close(device)
 
     def write_port(self, device: str, text: str) -> int:
+        self.require("peripherals")
         try:
             return self.peripherals.write_text(device, text)
         except Exception as e:
@@ -301,6 +415,7 @@ class KairosEngine:
             raise
 
     def read_port(self, device: str, size: int = 1024) -> str:
+        self.require("peripherals")
         try:
             return self.peripherals.read_text(device, size)
         except Exception as e:
@@ -316,12 +431,15 @@ class KairosEngine:
 
     # ---- Memories (user-retained data) ----
     def add_memory(self, content: str) -> str:
+        self.require("memory")
         return self.knowledge.add_memory(content)
 
     def list_memories(self) -> list:
+        self.require("memory")
         return self.knowledge.list_memories()
 
     def delete_memory(self, mem_id: str):
+        self.require("memory")
         self.knowledge.delete_memory(mem_id)
 
     def recall(self, query: str, limit: int = 8) -> list:
@@ -332,6 +450,7 @@ class KairosEngine:
         """Run a prediction. mode: auto | mirofish | quick."""
         from kairos.predictive.ingest import build_seed
 
+        self.require("predict")
         try:
             seed = build_seed(question, files=files, links=links, text=text, engine=self)
             pid = self.predictive_store.add(question, source=mode, status="running")
