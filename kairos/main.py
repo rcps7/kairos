@@ -15,6 +15,7 @@ from kairos.config import load_config, save_config
 from kairos.characters import CharacterManager
 from kairos.characters_presets import GENERAL_PROMPT
 from kairos.council import Council
+from kairos.tools import build_tool_protocol, format_tool_results, parse_tool_calls
 from kairos.email_client import EmailClient
 from kairos.gui.main_window import KairosGUI
 from kairos.learning import ErrorMemory, reflect
@@ -37,6 +38,7 @@ logger = logging.getLogger(__name__)
 
 RETENTION_INTERVAL_SECONDS = 7 * 24 * 60 * 60  # weekly
 HEARTBEAT_INTERVAL_SECONDS = 5
+MAX_TOOL_ROUNDS = 3
 
 
 class KairosEngine:
@@ -71,6 +73,7 @@ class KairosEngine:
         self._heartbeat_thread = None
         self._stop_event = threading.Event()
         self._heartbeat_stop = threading.Event()
+        self._in_chat = False
         self._write_pid()
         self._start_heartbeat()
 
@@ -119,10 +122,12 @@ class KairosEngine:
 
     # ---- LLM ----
     def ask_llm(self, prompt: str, provider_id: str = None, system_prompt: str = None,
-                use_character: bool = True) -> str:
+                use_character: bool = True, with_tools: bool = False) -> str:
         try:
             if use_character:
-                system_prompt = self.current_system_prompt(system_prompt)
+                system_prompt = self.current_system_prompt(
+                    system_prompt, with_tools=with_tools
+                )
             if system_prompt:
                 return self.llm.generate(prompt, system_prompt=system_prompt, provider_id=provider_id)
             return self.llm.generate(prompt, provider_id=provider_id)
@@ -142,12 +147,20 @@ class KairosEngine:
         )
 
     # ---- Agent Characters ----
-    def current_system_prompt(self, extra: str = None) -> str:
-        """Return the active character's system prompt, optionally merged with a task instruction."""
+    def current_system_prompt(self, extra: str = None, with_tools: bool = False) -> str:
+        """Return the active character's system prompt.
+
+        With ``with_tools`` the provider-agnostic tool protocol (restricted to
+        the character's allowed capabilities) is appended so the model can
+        request web tools.
+        """
         base = self.characters.active().get("system_prompt") or GENERAL_PROMPT
+        parts = [base]
+        if with_tools:
+            parts.append(build_tool_protocol(self.characters.capabilities()))
         if extra:
-            return f"{base}\n\n{extra}"
-        return base
+            parts.append(extra)
+        return "\n\n".join(parts)
 
     def character_capabilities(self) -> list:
         return self.characters.capabilities()
@@ -211,26 +224,136 @@ class KairosEngine:
     def restore_default_characters(self) -> list:
         return self.characters.restore_defaults()
 
-    def chat_with_recall(self, prompt: str) -> str:
-        """Answer a user message, injecting related retained data as context."""
+    def chat(self, prompt: str, attachment_paths=None, progress=None) -> str:
+        """Answer a user message with context, recall, vision and tool access.
+
+        The model may request web tools (search / learn / scrape) using the
+        documented tool protocol; those are executed here and their results fed
+        back for a final answer. Only web tools are exposed to the model.
+        """
+        if getattr(self, "_in_chat", False):
+            # Re-entrancy guard: tool execution must not start another chat loop.
+            return self.ask_llm(prompt)
+        self._in_chat = True
+        try:
+            context, images = ("", [])
+            if attachment_paths:
+                try:
+                    context, images = self.attach_context(attachment_paths)
+                except Exception as e:
+                    self.record_error("chat.attachments", e)
+                    context, images = ("", [])
+
+            user_content = self._build_user_content(prompt, context)
+
+            # Vision: if images are present and a vision provider exists, answer
+            # in one call (no tool loop).
+            if images:
+                vis = [p for p in self.list_providers() if self.llm.is_vision(p)]
+                if vis:
+                    return self.generate_with_images(
+                        user_content, images, provider_id=vis[0]
+                    )
+
+            conversation = user_content
+            reply = ""
+            for round_index in range(MAX_TOOL_ROUNDS):
+                reply = self.ask_llm(conversation, with_tools=True)
+                clean, calls = parse_tool_calls(reply)
+                if not calls:
+                    return clean or reply
+
+                results = []
+                for call in calls:
+                    if progress:
+                        try:
+                            progress(f"Running tool: {call.name} "
+                                     f"{call.query or call.url}".strip())
+                        except Exception:
+                            pass
+                    results.append((call, self._run_tool(call)))
+
+                conversation = (
+                    f"{conversation}\n\nASSISTANT TOOL REQUEST:\n{reply}\n\n"
+                    f"{format_tool_results(results)}\n\n"
+                    "Now answer the user's original question using the tool "
+                    "results above. Do not emit more tool tags unless essential."
+                )
+
+            # Rounds exhausted: return whatever prose we have.
+            clean, _ = parse_tool_calls(reply)
+            if clean:
+                return clean
+            return ("I gathered some information but could not finish the answer. "
+                    "Please refine your request or try again.")
+        except Exception as e:
+            self.record_error("chat", e)
+            try:
+                return self.ask_llm(prompt)
+            except Exception:
+                raise
+        finally:
+            self._in_chat = False
+
+    def _build_user_content(self, prompt: str, context: str) -> str:
+        sections = []
+        if context:
+            sections.append(f"ATTACHED MATERIAL:\n{context}")
         try:
             related = self.knowledge.recall(prompt, limit=6)
-            if related:
-                context_lines = []
-                for item in related:
-                    context_lines.append(f"- {item['text'][:400]}")
-                context = "\n".join(context_lines)
-                full_prompt = (
-                    "Use the following related information from the user's "
-                    "retained knowledge/memory if it helps answer the question.\n\n"
-                    f"RELATED INFORMATION:\n{context}\n\n"
-                    f"USER QUESTION: {prompt}"
-                )
-                return self.ask_llm(full_prompt)
-            return self.ask_llm(prompt)
+        except Exception:
+            related = []
+        if related:
+            recall = "\n".join(f"- {item['text'][:400]}" for item in related)
+            sections.append(
+                "RELATED INFORMATION FROM RETAINED MEMORY (use only if relevant "
+                "to the question; ignore unrelated items):\n" + recall
+            )
+        sections.append(f"USER QUESTION:\n{prompt}")
+        return "\n\n".join(sections)
+
+    def _run_tool(self, call) -> str:
+        """Execute a single model-requested tool, respecting capabilities."""
+        try:
+            if call.name == "web_search":
+                if not call.query:
+                    return "(no search query provided)"
+                results = self.search_web(call.query, max_results=8)
+                if not results:
+                    return f"(no results for: {call.query})"
+                lines = []
+                for i, r in enumerate(results[:8], 1):
+                    lines.append(
+                        f"{i}. {r.get('title', 'Untitled')} — {r.get('url', '')}\n"
+                        f"   {(r.get('description') or '').strip()}"
+                    )
+                return "\n".join(lines)
+
+            if not self.can("learn_web"):
+                self.require("learn_web")  # raises PermissionError
+
+            if call.name == "learn_web":
+                if not call.url:
+                    return "(no url provided)"
+                data = self.learn_from_page(call.url)
+                return f"Page: {data.get('title', call.url)}\n{data.get('summary', '')}"
+
+            if call.name == "scrape":
+                if not call.url:
+                    return "(no url provided)"
+                data = self.scrape_page(call.url)
+                return f"Page: {data.get('title', call.url)}\n{(data.get('text') or '')[:6000]}"
+
+            return f"(unknown tool: {call.name})"
+        except PermissionError as e:
+            return f"(tool not permitted: {e})"
         except Exception as e:
-            self.record_error("chat.recall", e)
-            return self.ask_llm(prompt)
+            self.record_error("chat.tool", e)
+            return f"(tool error: {e})"
+
+    def chat_with_recall(self, prompt: str) -> str:
+        """Backwards-compatible alias for :meth:`chat`."""
+        return self.chat(prompt)
 
     # ---- Attachments & Council ----
     def attach_context(self, paths):

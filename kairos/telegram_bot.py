@@ -144,7 +144,7 @@ class TelegramBot:
             await update.message.reply_text("Usage: /chat <message>")
             return
         try:
-            reply = await asyncio.to_thread(self.engine.ask_llm, prompt)
+            reply = await asyncio.to_thread(self.engine.chat, prompt)
             await update.message.reply_text(reply)
         except Exception as e:
             await update.message.reply_text(f"LLM error: {e}")

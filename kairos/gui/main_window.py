@@ -48,6 +48,7 @@ def _merge_save(mutate):
 
 class LLMWorker(QThread):
     finished = Signal(str)
+    progress = Signal(str)
 
     def __init__(self, engine, prompt, task="chat", attachments=None):
         super().__init__()
@@ -61,24 +62,11 @@ class LLMWorker(QThread):
             if self.task == "reflect":
                 reply = self.engine.reflect()
             else:
-                prompt = self.prompt
-                if self.attachments:
-                    context, images = self.engine.attach_context(self.attachments)
-                    if context:
-                        prompt = (
-                            "Use the following attached material as context for your answer.\n\n"
-                            f"ATTACHED MATERIAL:\n{context}\n\n"
-                            f"USER MESSAGE: {self.prompt}"
-                        )
-                    if images:
-                        vis = [p for p in self.engine.list_providers() if self.engine.llm.is_vision(p)]
-                        if vis:
-                            reply = self.engine.generate_with_images(
-                                prompt, images, provider_id=vis[0]
-                            )
-                            self.finished.emit(reply)
-                            return
-                reply = self.engine.chat_with_recall(prompt)
+                reply = self.engine.chat(
+                    self.prompt or "",
+                    attachment_paths=self.attachments,
+                    progress=lambda t: self.progress.emit(t),
+                )
             self.finished.emit(reply)
         except Exception as e:
             self.finished.emit(f"[Error] {e}")
@@ -1509,6 +1497,8 @@ class KairosGUI(QMainWindow):
     def __init__(self, engine):
         super().__init__()
         self.engine = engine
+        self._deep_timer = None
+        self._thinking_elapsed = 0
         self.setWindowTitle("KAIROS  -  Self-Evolving AI Agent")
         self.resize(1280, 800)
         self.setMinimumSize(960, 600)
@@ -2351,6 +2341,9 @@ class KairosGUI(QMainWindow):
         self._start_deep_thinking_timer()
         self.worker = LLMWorker(self.engine, text, attachments=attachments)
         self.worker.finished.connect(self.on_llm_reply)
+        self.worker.progress.connect(
+            lambda t: self._append_bubble("Kairos", t, "system", TEXT_GREY)
+        )
         self.worker.start()
 
     def _send_council(self, text):
@@ -2500,6 +2493,7 @@ class KairosGUI(QMainWindow):
             self._set_mood("idle")
 
     def _start_deep_thinking_timer(self):
+        self._stop_deep_thinking_timer()
         self._thinking_elapsed = 0
         self._deep_timer = QTimer(self)
         self._deep_timer.timeout.connect(self._tick_thinking)
@@ -2511,9 +2505,10 @@ class KairosGUI(QMainWindow):
             self._set_mood("deep_thinking")
 
     def _stop_deep_thinking_timer(self):
-        if hasattr(self, "_deep_timer"):
-            self._deep_timer.stop()
-            self._deep_timer = None
+        timer = getattr(self, "_deep_timer", None)
+        if timer is not None:
+            timer.stop()
+        self._deep_timer = None
 
     def new_session(self):
         self._clear_bubbles()
@@ -2575,6 +2570,8 @@ class KairosGUI(QMainWindow):
 
     def run_reflection(self):
         self._pending_kairos_bubble = self._append_bubble("Kairos", "Reflecting on recent errors ...", "kairos", GREEN)
+        self._set_mood("thinking")
+        self._start_deep_thinking_timer()
         self.worker = LLMWorker(self.engine, None, task="reflect")
         self.worker.finished.connect(self.on_llm_reply)
         self.worker.start()
