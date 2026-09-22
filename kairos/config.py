@@ -37,6 +37,21 @@ DEFAULT_CONFIG = {
     "active_character": "general",
     "character": {
         "dir_name": "AGENT_CHARACTER"
+    },
+    "graph_memory": {
+        "enabled": True,
+        "db_path": None,
+        "require_approval": True,
+        "auto_approve": False,
+        "extract_on_chat": True,
+        "use_in_chat": True,
+        "use_in_tools": True,
+        "use_in_skills": True,
+        "use_in_council": True,
+        "use_in_predict": True,
+        "max_nodes": 12,
+        "max_memories": 6,
+        "dedup_distance": 0.15
     }
 }
 

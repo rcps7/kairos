@@ -1049,6 +1049,283 @@ class CharacterDialog(QDialog):
         self._select_id(self._current_id)
 
 
+class PendingDialog(QDialog):
+    """Review, edit, approve or reject proposed graph knowledge."""
+
+    def __init__(self, engine, parent=None):
+        super().__init__(parent)
+        self.engine = engine
+        self.setWindowTitle("Pending Knowledge")
+        self.setStyleSheet(_dialog_style())
+        self.resize(820, 560)
+        layout = QHBoxLayout(self)
+
+        left = QWidget()
+        ll = QVBoxLayout(left)
+        ll.addWidget(QLabel("Proposed items (not stored until approved)"))
+        self.list = QListWidget()
+        self.list.currentItemChanged.connect(self._on_select)
+        ll.addWidget(self.list, 1)
+        row = QHBoxLayout()
+        for label, slot in (("Approve", self._approve), ("Reject", self._reject)):
+            b = QPushButton(label)
+            b.clicked.connect(slot)
+            row.addWidget(b)
+        ll.addLayout(row)
+        row2 = QHBoxLayout()
+        all_btn = QPushButton("Approve All")
+        all_btn.clicked.connect(self._approve_all)
+        rej_btn = QPushButton("Reject All")
+        rej_btn.setStyleSheet(f"background-color: {RED}; color: white;")
+        rej_btn.clicked.connect(self._reject_all)
+        row2.addWidget(all_btn)
+        row2.addWidget(rej_btn)
+        ll.addLayout(row2)
+        layout.addWidget(left, 1)
+
+        right = QWidget()
+        rl = QVBoxLayout(right)
+        rl.addWidget(QLabel("Edit payload (JSON) before approving:"))
+        self.editor = QTextEdit()
+        self.editor.setFont(QFont("Consolas", 9))
+        rl.addWidget(self.editor, 1)
+        row3 = QHBoxLayout()
+        save_btn = QPushButton("Save Edits")
+        save_btn.clicked.connect(self._save_edits)
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.accept)
+        row3.addWidget(save_btn)
+        row3.addStretch()
+        row3.addWidget(close_btn)
+        rl.addLayout(row3)
+        layout.addWidget(right, 2)
+        self.refresh()
+
+    def refresh(self):
+        self.list.clear()
+        for item in self.engine.list_pending_graph():
+            p = item.get("payload", {})
+            n_e = len(p.get("entities", []))
+            n_r = len(p.get("relations", []))
+            text = f"[{item['source']}] {n_e} entities, {n_r} relations"
+            qitem = QListWidgetItem(text)
+            qitem.setData(Qt.UserRole, item["id"])
+            self.list.addItem(qitem)
+        self._on_select(self.list.currentItem())
+
+    def _on_select(self, current, previous=None):
+        import json
+        if not current:
+            self.editor.clear()
+            return
+        item = self.engine.get_pending_graph(current.data(Qt.UserRole))
+        if item:
+            self.editor.setPlainText(json.dumps(item.get("payload", {}), indent=2, ensure_ascii=False))
+
+    def _current_id(self):
+        it = self.list.currentItem()
+        return it.data(Qt.UserRole) if it else None
+
+    def _save_edits(self):
+        import json
+        pid = self._current_id()
+        if not pid:
+            return
+        try:
+            data = json.loads(self.editor.toPlainText())
+        except Exception as e:
+            QMessageBox.warning(self, "Kairos", f"Invalid JSON: {e}")
+            return
+        self.engine.update_pending_graph(pid, data)
+
+    def _approve(self):
+        pid = self._current_id()
+        if not pid:
+            return
+        self._save_edits()
+        if self.engine.approve_pending_graph(pid):
+            self.refresh()
+
+    def _reject(self):
+        pid = self._current_id()
+        if not pid:
+            return
+        self.engine.reject_pending_graph(pid)
+        self.refresh()
+
+    def _approve_all(self):
+        self._save_edits()
+        self.engine.approve_all_pending_graph()
+        self.refresh()
+
+    def _reject_all(self):
+        self.engine.reject_all_pending_graph()
+        self.refresh()
+
+
+class GraphDialog(QDialog):
+    """Search, edit and delete long-term knowledge graph data."""
+
+    def __init__(self, engine, parent=None):
+        super().__init__(parent)
+        self.engine = engine
+        self.setWindowTitle("Knowledge Graph")
+        self.setStyleSheet(_dialog_style())
+        self.resize(860, 600)
+        layout = QVBoxLayout(self)
+
+        top = QHBoxLayout()
+        self.search_edit = QLineEdit()
+        self.search_edit.setPlaceholderText("Search entities, relations and notes...")
+        self.search_edit.returnPressed.connect(self.search)
+        search_btn = QPushButton("Search")
+        search_btn.clicked.connect(self.search)
+        refresh_btn = QPushButton("List All")
+        refresh_btn.clicked.connect(self.refresh)
+        top.addWidget(self.search_edit, 1)
+        top.addWidget(search_btn)
+        top.addWidget(refresh_btn)
+        layout.addLayout(top)
+
+        self.tree = QTreeWidget()
+        self.tree.setHeaderLabels(["Type", "Name", "Detail"])
+        self.tree.setColumnWidth(0, 90)
+        self.tree.setColumnWidth(1, 220)
+        layout.addWidget(self.tree, 1)
+
+        self.stats_label = QLabel("")
+        self.stats_label.setStyleSheet(f"color: {TEXT_GREY};")
+        layout.addWidget(self.stats_label)
+
+        row = QHBoxLayout()
+        edit_btn = QPushButton("Edit Entity")
+        edit_btn.clicked.connect(self.edit_entity)
+        del_btn = QPushButton("Delete Selected")
+        del_btn.setStyleSheet(f"background-color: {RED}; color: white;")
+        del_btn.clicked.connect(self.delete_selected)
+        pending_btn = QPushButton("Pending Review")
+        pending_btn.clicked.connect(lambda: PendingDialog(self.engine, self).exec())
+        clear_btn = QPushButton("Clear All")
+        clear_btn.setStyleSheet(f"background-color: {RED}; color: white;")
+        clear_btn.clicked.connect(self.clear_all)
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.accept)
+        row.addWidget(edit_btn)
+        row.addWidget(del_btn)
+        row.addWidget(pending_btn)
+        row.addWidget(clear_btn)
+        row.addStretch()
+        row.addWidget(close_btn)
+        layout.addLayout(row)
+
+        self._update_stats()
+        self.refresh()
+
+    def _update_stats(self):
+        try:
+            s = self.engine.graph_stats()
+            self.stats_label.setText(
+                f"Entities: {s.get('entities', 0)}  |  Relations: {s.get('relations', 0)}  |  "
+                f"Memories: {s.get('memories', 0)}  |  Vector: {s.get('vector')}  |  {s.get('db_path','')}"
+            )
+        except Exception:
+            self.stats_label.setText("Graph memory unavailable.")
+
+    def refresh(self):
+        self.tree.clear()
+        for e in self.engine.graph_list_entities():
+            item = QTreeWidgetItem(["entity", e["name"], f"{e['kind']} | mentions={e.get('mentions',0)} | {e.get('summary','')}"])
+            item.setData(0, Qt.UserRole, ("entity", e["id"], None, None))
+            self.tree.addTopLevelItem(item)
+
+    def search(self):
+        q = self.search_edit.text().strip()
+        if not q:
+            self.refresh()
+            return
+        self.tree.clear()
+        res = self.engine.graph_search(q, limit=25)
+        for e in res.get("entities", []):
+            item = QTreeWidgetItem(["entity", e["name"], f"{e['kind']} | {e.get('summary','')}"])
+            item.setData(0, Qt.UserRole, ("entity", e["id"], None, None))
+            for rel in e.get("relations", []):
+                child = QTreeWidgetItem(["relation", rel["predicate"], rel["target"]])
+                # store subject/object loosely; deletion needs ids - use predicate + target name
+                child.setData(0, Qt.UserRole, ("relation", e["id"], rel["predicate"], rel["target"]))
+                item.addChild(child)
+            self.tree.addTopLevelItem(item)
+            item.setExpanded(True)
+        for m in res.get("memories", []):
+            item = QTreeWidgetItem(["memory", (m.get("kind") or "note"), (m.get("text") or "")[:200]])
+            item.setData(0, Qt.UserRole, ("memory", m.get("text"), None, None))
+            self.tree.addTopLevelItem(item)
+
+    def _selected(self):
+        it = self.tree.currentItem()
+        return it.data(0, Qt.UserRole) if it else None
+
+    def edit_entity(self):
+        sel = self._selected()
+        if not sel or sel[0] != "entity":
+            QMessageBox.information(self, "Kairos", "Select an entity first.")
+            return
+        from PySide6.QtWidgets import QInputDialog
+        eid = sel[1]
+        current = None
+        for e in self.engine.graph_list_entities():
+            if e["id"] == eid:
+                current = e
+                break
+        name, ok = QInputDialog.getText(self, "Edit Entity", "Name:", text=(current or {}).get("name", ""))
+        if not ok:
+            return
+        kind, ok2 = QInputDialog.getText(self, "Edit Entity", "Kind:", text=(current or {}).get("kind", ""))
+        if not ok2:
+            return
+        summary, ok3 = QInputDialog.getText(self, "Edit Entity", "Summary:", text=(current or {}).get("summary", ""))
+        if not ok3:
+            return
+        self.engine.graph_update_entity(eid, name=name.strip(), kind=kind.strip(), summary=summary.strip())
+        self._update_stats()
+        self.refresh()
+
+    def delete_selected(self):
+        sel = self._selected()
+        if not sel:
+            QMessageBox.information(self, "Kairos", "Select an item to delete.")
+            return
+        kind = sel[0]
+        if kind == "entity":
+            if QMessageBox.question(self, "Delete", f"Delete entity '{sel[1]}' and its links?",
+                                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+                return
+            self.engine.graph_delete_entity(sel[1])
+        elif kind == "memory":
+            if QMessageBox.question(self, "Delete", "Delete this memory note?",
+                                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+                return
+            # match memory by text (ids not surfaced in search UI)
+            mid = sel[1]
+            for m in self.engine.graph_search(mid, limit=5).get("memories", []):
+                if m.get("text") == mid:
+                    break
+            QMessageBox.information(self, "Kairos", "Memory deletion by text is not available; use Clear All.")
+            return
+        elif kind == "relation":
+            QMessageBox.information(self, "Kairos", "Select the parent entity and use Clear All, or edit via the graph.")
+            return
+        self._update_stats()
+        self.refresh()
+
+    def clear_all(self):
+        if QMessageBox.question(self, "Clear Graph", "Delete ALL graph knowledge permanently?",
+                                QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+            return
+        self.engine.graph_clear()
+        self._update_stats()
+        self.refresh()
+
+
 class PredictWorker(QThread):
     finished = Signal(dict)
     error = Signal(str)
@@ -1609,6 +1886,13 @@ class KairosGUI(QMainWindow):
 
         self._apply_character_capabilities()
 
+        # Notify when proposed knowledge awaits approval.
+        self._last_pending = 0
+        self.pending_timer = QTimer(self)
+        self.pending_timer.timeout.connect(self._check_pending_knowledge)
+        self.pending_timer.start(6000)
+        QTimer.singleShot(2500, self._check_pending_knowledge)
+
         # Check for updates (at most once per day).
         QTimer.singleShot(1500, self.maybe_auto_check_updates)
 
@@ -1639,6 +1923,8 @@ class KairosGUI(QMainWindow):
         edit_menu.addSeparator()
         self._skills_action = edit_menu.addAction("Skills", self.open_skill_dialog)
         edit_menu.addAction("Agent Character\u2026", self.open_character_dialog)
+        edit_menu.addAction("Knowledge Graph\u2026", self.open_graph_dialog)
+        edit_menu.addAction("Pending Knowledge\u2026", self.open_pending_dialog)
 
         tools_menu = menubar.addMenu("&Tools")
         tools_menu.addAction("Predictive Engine", self.open_predict_dialog)
@@ -1788,6 +2074,7 @@ class KairosGUI(QMainWindow):
             ("Providers", None, self.open_provider_dialog),
             ("Peripherals", "peripherals", self.open_peripheral_dialog),
             ("Character", None, self.open_character_dialog),
+            ("Graph", None, self.open_graph_dialog),
             ("Self-Reflect", None, self.run_reflection),
         ]
         self._toolbar_buttons = {}
@@ -1946,9 +2233,13 @@ class KairosGUI(QMainWindow):
         self.active_llm_label.setStyleSheet(f"color: {TEXT_GREY}; font-family: 'Segoe UI', sans-serif;")
         self.character_label = QLabel("")
         self.character_label.setStyleSheet(f"color: {GREEN}; font-family: 'Segoe UI', sans-serif;")
+        self.pending_label = QLabel("")
+        self.pending_label.setStyleSheet(f"color: {GREEN_DIM}; font-weight: bold; font-family: 'Segoe UI', sans-serif;")
         self.mood = MoodIndicator()
         header.addWidget(title)
         header.addStretch()
+        header.addWidget(self.pending_label)
+        header.addSpacing(12)
         header.addWidget(self.character_label)
         header.addSpacing(12)
         header.addWidget(self.active_llm_label)
@@ -2567,6 +2858,35 @@ class KairosGUI(QMainWindow):
             if prof.get("disclaimer"):
                 msg += f"\n\n{prof['disclaimer']}"
             self._append_bubble("Character", msg, "system", GREEN)
+
+    def open_graph_dialog(self):
+        GraphDialog(self.engine, self).exec()
+        self._check_pending_knowledge()
+
+    def open_pending_dialog(self):
+        before = self.engine.graph_pending_count()
+        PendingDialog(self.engine, self).exec()
+        self._last_pending = self.engine.graph_pending_count()
+        self._check_pending_knowledge()
+
+    def _check_pending_knowledge(self):
+        try:
+            n = self.engine.graph_pending_count()
+        except Exception:
+            n = 0
+        if n > 0:
+            self.pending_label.setText(f"\u25CF Pending knowledge: {n}")
+            self.pending_label.setToolTip("New knowledge awaiting your approval. Click Edit \u2192 Pending Knowledge.")
+        else:
+            self.pending_label.setText("")
+            self.pending_label.setToolTip("")
+        if n > getattr(self, "_last_pending", 0):
+            self._append_bubble(
+                "Knowledge",
+                f"{n} new item(s) await your approval. Open Edit \u2192 Pending Knowledge to review.",
+                "system", GREEN,
+            )
+        self._last_pending = n
 
     def run_reflection(self):
         self._pending_kairos_bubble = self._append_bubble("Kairos", "Reflecting on recent errors ...", "kairos", GREEN)

@@ -54,6 +54,10 @@ class TelegramBot:
             self.app.add_handler(CommandHandler("predict", self.predict_command))
             self.app.add_handler(CommandHandler("character", self.character_command))
             self.app.add_handler(CommandHandler("setcharacter", self.setcharacter_command))
+            self.app.add_handler(CommandHandler("graph", self.graph_command))
+            self.app.add_handler(CommandHandler("graphstats", self.graphstats_command))
+            self.app.add_handler(CommandHandler("graphdel", self.graphdel_command))
+            self.app.add_handler(CommandHandler("pending", self.pending_command))
             self.app.add_handler(CommandHandler("kill", self.kill_command))
             self.app.add_handler(CallbackQueryHandler(self.button_handler))
 
@@ -121,6 +125,105 @@ class TelegramBot:
             msg += f"\n\n{prof['disclaimer']}"
         await update.message.reply_text(msg)
 
+    async def graph_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        denied = self._capability_denied("memory")
+        if denied:
+            await update.message.reply_text(denied)
+            return
+        query = " ".join(context.args)
+        if not query:
+            await update.message.reply_text("Usage: /graph <query>")
+            return
+        try:
+            res = await asyncio.to_thread(self.engine.graph_search, query, 15)
+        except Exception as e:
+            await update.message.reply_text(f"Graph error: {e}")
+            return
+        ents = res.get("entities", [])
+        if not ents:
+            await update.message.reply_text("No matching knowledge.")
+            return
+        lines = [f"Knowledge graph results for '{query}':"]
+        for e in ents[:15]:
+            lines.append(f"- {e['name']} [{e['kind']}] id={e['id']}")
+            for r in e.get("relations", [])[:5]:
+                lines.append(f"    {e['name']} {r['predicate']} {r['target']}")
+        await update.message.reply_text("\n".join(lines)[:3800])
+
+    async def graphstats_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        denied = self._capability_denied("memory")
+        if denied:
+            await update.message.reply_text(denied)
+            return
+        try:
+            s = await asyncio.to_thread(self.engine.graph_stats)
+        except Exception as e:
+            await update.message.reply_text(f"Graph error: {e}")
+            return
+        await update.message.reply_text(
+            f"Knowledge graph\nEntities: {s.get('entities', 0)}\n"
+            f"Relations: {s.get('relations', 0)}\nMemories: {s.get('memories', 0)}\n"
+            f"Vector index: {s.get('vector')}\nDB: {s.get('db_path', '')}"
+        )
+
+    async def graphdel_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        denied = self._capability_denied("memory")
+        if denied:
+            await update.message.reply_text(denied)
+            return
+        if not context.args:
+            await update.message.reply_text("Usage: /graphdel <entity_id>")
+            return
+        eid = context.args[0].strip()
+        try:
+            ok = await asyncio.to_thread(self.engine.graph_delete_entity, eid)
+        except Exception as e:
+            await update.message.reply_text(f"Delete failed: {e}")
+            return
+        await update.message.reply_text("Entity deleted." if ok else "Entity not found.")
+
+    async def pending_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        denied = self._capability_denied("memory")
+        if denied:
+            await update.message.reply_text(denied)
+            return
+        items = await asyncio.to_thread(self.engine.list_pending_graph)
+        if not items:
+            await update.message.reply_text("No pending knowledge.")
+            return
+        for item in items[:5]:
+            p = item.get("payload", {})
+            keyboard = [[
+                InlineKeyboardButton("Approve", callback_data=f"gapprove_{item['id']}"),
+                InlineKeyboardButton("Reject", callback_data=f"greject_{item['id']}"),
+            ]]
+            names = "\n".join(f"- {e['name']} [{e['kind']}]" for e in p.get("entities", [])[:8])
+            text = (f"[{item.get('source','chat')}] {len(p.get('entities',[]))} entities, "
+                    f"{len(p.get('relations',[]))} relations\n{names}")
+            await update.message.reply_text(text[:3500], reply_markup=InlineKeyboardMarkup(keyboard))
+
+    async def prompt_graph_approval(self, pid: str, proposal: dict):
+        """Notify known chats that new knowledge needs approval."""
+        if not self._chat_ids or not self.app:
+            return
+        keyboard = [[
+            InlineKeyboardButton("Approve", callback_data=f"gapprove_{pid}"),
+            InlineKeyboardButton("Reject", callback_data=f"greject_{pid}"),
+        ]]
+        names = "\n".join(f"- {e['name']} [{e['kind']}]" for e in proposal.get("entities", [])[:8])
+        text = (f"New knowledge awaiting approval "
+                f"({len(proposal.get('entities',[]))} entities, "
+                f"{len(proposal.get('relations',[]))} relations):\n{names}\n\n"
+                "Use /pending to review.")
+        for chat_id in list(self._chat_ids):
+            try:
+                await self.app.bot.send_message(
+                    chat_id=chat_id, text=text[:3500],
+                    reply_markup=InlineKeyboardMarkup(keyboard),
+                )
+            except Exception as e:
+                logger.error("Failed to send graph approval: %s", e)
+
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         self._register_chat(update)
         await update.message.reply_text(
@@ -135,7 +238,10 @@ class TelegramBot:
             "/providers - list LLM providers\n"
             "/setllm <id> - switch LLM\n"
             "/character - show/switch agent character\n"
-            "/setcharacter <id> - activate a character"
+            "/setcharacter <id> - activate a character\n"
+            "/graph <query> - search the knowledge graph\n"
+            "/pending - review proposed knowledge\n"
+            "/graphdel <id> - delete a graph entity"
         )
 
     async def chat_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -499,6 +605,18 @@ class TelegramBot:
         query = update.callback_query
         await query.answer()
         data = query.data
+
+        if data.startswith("gapprove_"):
+            pid = data[len("gapprove_"):]
+            ok = await asyncio.to_thread(self.engine.approve_pending_graph, pid)
+            await query.edit_message_text(text="Approved and stored in the knowledge graph." if ok
+                                          else "Approval failed.")
+            return
+        if data.startswith("greject_"):
+            pid = data[len("greject_"):]
+            await asyncio.to_thread(self.engine.reject_pending_graph, pid)
+            await query.edit_message_text(text="Rejected.")
+            return
 
         if data in ("dl_mp3", "dl_mp4"):
             denied = self._capability_denied("download_media")

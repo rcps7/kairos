@@ -50,6 +50,7 @@ Licensed under the **PolyForm Noncommercial License 1.0.0** (free for personal/n
 | Serial peripheral control (ESP32 / Arduino / RPi) | GUI / Telegram |
 | Multi-provider LLM (Moonshot/Kimi, DeepSeek, OpenAI, any OpenAI-style API) | GUI / Telegram |
 | Agent Characters — selectable personas with per-character tool access | GUI / Telegram |
+| Long-term memory — LadybugDB knowledge graph with approval gate | GUI / Telegram |
 | Skill system — create, view, edit, run, delete skills | GUI / Telegram |
 | Self-improvement — records errors, reflects, stores lessons | GUI / Telegram |
 | Watchdog with kill switch + heartbeat monitoring | `kill.bat`, GUI, Telegram `/kill` |
@@ -202,6 +203,10 @@ buttons**, and is divided into three panes:
 | `/setllm <id>` | Switch active LLM provider |
 | `/character` | Show the active character and list all characters |
 | `/setcharacter <id>` | Switch the active agent character |
+| `/graph <query>` | Search the long-term knowledge graph |
+| `/pending` | Review/approve/reject proposed knowledge |
+| `/graphstats` | Knowledge graph counts |
+| `/graphdel <id>` | Delete a graph entity |
 | `/reflect` | Analyze recent errors and store a lesson |
 | `/lessons` | Show lessons learned |
 | `/ports` | List serial ports |
@@ -367,6 +372,60 @@ The active character id is saved in `%USERPROFILE%\.kairos\config.json` as
 
 `"capabilities": null` means *all tools allowed*. `"skills": null` means *all
 skills allowed*; otherwise it is a whitelist of skill names.
+
+---
+
+## Long-Term Memory (Knowledge Graph)
+
+Kairos keeps a persistent, relationship-aware memory in **LadybugDB** (the
+embedded graph database formerly known as Kuzu). It stores entities,
+relationships and episodic notes, and feeds a compact, relevant context into
+LLM calls, skill generation, the council and predictions — so Kairos has the
+"full picture" of your context before it acts.
+
+### How it works
+
+1. After a substantive chat turn (and on `/remember`, learned pages,
+   predictions and reflections) Kairos asks the LLM to extract durable
+   **entities** and **relationships**.
+2. The proposal is **not stored automatically** — it is queued and you are
+   notified. Nothing enters the graph until **you explicitly approve it**.
+3. On approval the entities are de-duplicated (semantic vector match) and
+   merged into the graph; relationships are linked by predicate.
+
+Semantic retrieval uses Ladybug's native HNSW **vector index** (embeddings from
+the same all-MiniLM-L6-v2 model Kairos already uses) plus graph traversal, so
+results are both semantically *and* relationally relevant.
+
+### Managing memory
+
+- **GUI:** the toolbar **Graph** button (or `Edit → Knowledge Graph…`) lets you
+  **search**, **edit** entities, **delete** entities/relations/notes and
+  **clear** the graph. `Edit → Pending Knowledge…` is the approval queue, where
+  each proposal can be edited (JSON) before you **approve** or **reject** it.
+- **Telegram:** `/graph <query>`, `/pending`, `/graphstats`, `/graphdel <id>`,
+  plus inline **Approve / Reject** buttons on notifications.
+
+### Generic, low-cost model
+
+Entity *kind* and relationship *predicate* are open strings held as data (not
+schema), so new types never require migrations and de-duplication keeps the
+graph small — minimising LLM cost.
+
+### Storage & configuration
+
+- Graph: `~/.kairos/graph.lbdb` · pending queue: `~/.kairos/graph_pending.db`
+  (user data — preserved across app updates).
+- Native runtime (the Ladybug shared library + OpenSSL/MSVC deps) is assembled
+  once into `~/.kairos/lbug/`.
+- Config (`graph_memory`): `enabled`, `require_approval` (default true),
+  `auto_approve` (default false), `extract_on_chat`, and per-area reuse toggles
+  `use_in_chat`, `use_in_tools`, `use_in_skills`, `use_in_council`,
+  `use_in_predict`, plus `max_nodes`, `max_memories`, `dedup_distance`.
+
+> Note: the Ladybug **full-text (FTS)** extension aborts the process on the
+> current Windows/Python 3.14 build, so keyword search falls back to a
+> Python-side scan; vector search and traversal are unaffected.
 
 ---
 

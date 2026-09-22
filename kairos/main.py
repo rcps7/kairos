@@ -15,6 +15,9 @@ from kairos.config import load_config, save_config
 from kairos.characters import CharacterManager
 from kairos.characters_presets import GENERAL_PROMPT
 from kairos.council import Council
+from kairos.graph_memory import GraphMemory
+from kairos.pending_store import PendingStore
+from kairos import memory_extract
 from kairos.tools import build_tool_protocol, format_tool_results, parse_tool_calls
 from kairos.email_client import EmailClient
 from kairos.gui.main_window import KairosGUI
@@ -67,6 +70,10 @@ class KairosEngine:
         self.predictive_store = PredictiveStore()
         self.mirofish = MiroFishClient(self.config.get("mirofish", {}).get("base_url", "http://localhost:5001"))
         self.quick_predictor = QuickPredictor(self)
+        self.pending = PendingStore()
+        self.graph = None
+        self.on_pending_graph = None
+        self._init_graph_memory()
         self._loop = None
         self._thread = None
         self._retention_thread = None
@@ -224,6 +231,170 @@ class KairosEngine:
     def restore_default_characters(self) -> list:
         return self.characters.restore_defaults()
 
+    # ---- Long-term graph memory (LadybugDB) ----
+    def _graph_cfg(self) -> dict:
+        return self.config.get("graph_memory", {}) or {}
+
+    def _graph_embed_fn(self):
+        fn = getattr(self.knowledge, "_embed_fn", None)
+        return fn
+
+    def _init_graph_memory(self):
+        cfg = self._graph_cfg()
+        if not cfg.get("enabled", True):
+            return
+        try:
+            db_path = cfg.get("db_path") or str(Path.home() / ".kairos" / "graph.lbdb")
+            self.graph = GraphMemory(
+                db_path,
+                embed_fn=self._graph_embed_fn(),
+                dedup_distance=float(cfg.get("dedup_distance", 0.15)),
+            )
+            if not self.graph.available:
+                logger.warning("Graph memory unavailable: %s", self.graph.error)
+        except Exception:
+            logger.exception("Failed to initialise graph memory.")
+            self.graph = None
+
+    def graph_context(self, query: str) -> str:
+        cfg = self._graph_cfg()
+        if not self.graph or not cfg.get("enabled", True):
+            return ""
+        try:
+            return self.graph.retrieve(
+                query,
+                k_nodes=int(cfg.get("max_nodes", 12)),
+                k_memories=int(cfg.get("max_memories", 6)),
+            ).get("context", "")
+        except Exception as e:
+            self.record_error("graph.retrieve", e)
+            return ""
+
+    def ingest_graph(self, text: str, source: str = "chat", kind: str = "chat"):
+        """Extract knowledge and either queue it for approval or store it."""
+        cfg = self._graph_cfg()
+        if not self.graph or not cfg.get("enabled", True):
+            return None
+        if not memory_extract.should_extract(text):
+            return None
+        try:
+            proposal = memory_extract.extract(self, text, source=source, kind=kind)
+        except Exception as e:
+            self.record_error("graph.extract", e)
+            return None
+        if not proposal.get("entities"):
+            return None
+        if cfg.get("require_approval", True) and not cfg.get("auto_approve", False):
+            pid = self.pending.add(proposal, source=source, kind=kind)
+            self._notify_pending(pid, proposal)
+            return {"pending": pid, "entities": len(proposal["entities"])}
+        try:
+            self.graph.upsert(proposal.get("entities"), proposal.get("relations"), proposal.get("memory"))
+        except Exception as e:
+            self.record_error("graph.store", e)
+            return None
+        return {"stored": len(proposal["entities"])}
+
+    def spawn_graph_extract(self, text: str, source: str = "chat", kind: str = "chat"):
+        cfg = self._graph_cfg()
+        if not self.graph or not cfg.get("enabled", True) or not cfg.get("extract_on_chat", True):
+            return
+        threading.Thread(
+            target=self.ingest_graph, args=(text, source, kind), daemon=True
+        ).start()
+
+    def _notify_pending(self, pid: str, proposal: dict):
+        try:
+            if self.telegram and self.telegram.running and self._loop:
+                asyncio.run_coroutine_threadsafe(
+                    self.telegram.prompt_graph_approval(pid, proposal), self._loop
+                )
+        except Exception:
+            pass
+        cb = getattr(self, "on_pending_graph", None)
+        if cb:
+            try:
+                cb(pid, proposal)
+            except Exception:
+                pass
+
+    # ---- Pending approval queue ----
+    def graph_pending_count(self) -> int:
+        try:
+            return self.pending.count_pending()
+        except Exception:
+            return 0
+
+    def list_pending_graph(self, limit: int = 100) -> list:
+        return self.pending.list("pending", limit)
+
+    def get_pending_graph(self, pid: str) -> dict:
+        return self.pending.get(pid)
+
+    def update_pending_graph(self, pid: str, payload: dict) -> bool:
+        return self.pending.update_payload(pid, payload)
+
+    def reject_pending_graph(self, pid: str) -> bool:
+        return self.pending.mark(pid, "rejected")
+
+    def approve_pending_graph(self, pid: str) -> bool:
+        item = self.pending.get(pid)
+        if not item:
+            return False
+        payload = item.get("payload", {})
+        try:
+            if self.graph:
+                self.graph.upsert(payload.get("entities"), payload.get("relations"),
+                                  payload.get("memory"))
+        except Exception as e:
+            self.record_error("graph.store", e)
+            return False
+        self.pending.mark(pid, "approved")
+        return True
+
+    def approve_all_pending_graph(self) -> int:
+        n = 0
+        for item in self.list_pending_graph():
+            if self.approve_pending_graph(item["id"]):
+                n += 1
+        return n
+
+    def reject_all_pending_graph(self) -> int:
+        n = 0
+        for item in self.list_pending_graph():
+            if self.reject_pending_graph(item["id"]):
+                n += 1
+        return n
+
+    # ---- Graph CRUD ----
+    def graph_search(self, query: str, limit: int = 20) -> dict:
+        if not self.graph:
+            return {"entities": [], "relations": [], "memories": []}
+        return self.graph.search(query, limit)
+
+    def graph_stats(self) -> dict:
+        if not self.graph:
+            return {"available": False}
+        return self.graph.stats()
+
+    def graph_list_entities(self, limit: int = 200) -> list:
+        return self.graph.list_entities(limit) if self.graph else []
+
+    def graph_update_entity(self, eid, **kwargs) -> bool:
+        return self.graph.update_entity(eid, **kwargs) if self.graph else False
+
+    def graph_delete_entity(self, eid) -> bool:
+        return self.graph.delete_entity(eid) if self.graph else False
+
+    def graph_delete_relation(self, sid, predicate, oid) -> bool:
+        return self.graph.delete_relation(sid, predicate, oid) if self.graph else False
+
+    def graph_delete_memory(self, mid) -> bool:
+        return self.graph.delete_memory(mid) if self.graph else False
+
+    def graph_clear(self) -> bool:
+        return self.graph.clear() if self.graph else False
+
     def chat(self, prompt: str, attachment_paths=None, progress=None) -> str:
         """Answer a user message with context, recall, vision and tool access.
 
@@ -294,6 +465,9 @@ class KairosEngine:
                 raise
         finally:
             self._in_chat = False
+            cfg = self._graph_cfg()
+            if cfg.get("use_in_chat", True) or cfg.get("use_in_tools", True):
+                self.spawn_graph_extract(prompt, source="chat", kind="chat")
 
     def _build_user_content(self, prompt: str, context: str) -> str:
         sections = []
@@ -309,6 +483,11 @@ class KairosEngine:
                 "RELATED INFORMATION FROM RETAINED MEMORY (use only if relevant "
                 "to the question; ignore unrelated items):\n" + recall
             )
+        cfg = self._graph_cfg()
+        if cfg.get("enabled", True) and cfg.get("use_in_chat", True):
+            graph_ctx = self.graph_context(prompt)
+            if graph_ctx:
+                sections.append(graph_ctx)
         sections.append(f"USER QUESTION:\n{prompt}")
         return "\n\n".join(sections)
 
@@ -374,6 +553,11 @@ class KairosEngine:
             context, images = ("", [])
             if attachment_paths:
                 context, images = self.attach_context(attachment_paths)
+            cfg = self._graph_cfg()
+            if self.graph and cfg.get("use_in_council", True):
+                g = self.graph_context(prompt)
+                if g:
+                    context = f"{context}\n\n{g}" if context else g
             if not members:
                 members = self.config.get("council", {}).get("members") or []
             council = Council(self)
@@ -418,6 +602,7 @@ class KairosEngine:
             import uuid
             doc_id = uuid.uuid4().hex
             self.knowledge.add_document(doc_id, url, data["html"], data["text"], summary)
+            self.spawn_graph_extract(summary, source="web", kind="document")
             return {"id": doc_id, "url": url, "title": data["title"], "summary": summary}
         except Exception as e:
             self.record_error("learn_from_page", e)
@@ -477,6 +662,11 @@ class KairosEngine:
             "- Do not import Kairos modules other than `kairos.skills.base`.\n"
             "Output the code now."
         )
+        cfg = self._graph_cfg()
+        if self.graph and cfg.get("use_in_skills", True):
+            g = self.graph_context(description)
+            if g:
+                user += f"\n\nRELEVANT EXISTING KNOWLEDGE (context only):\n{g}"
         code = self.ask_llm(user, system_prompt=system, use_character=False)
         code = self._strip_code_fences(code)
         if "def run" not in code or "class " not in code:
@@ -555,7 +745,9 @@ class KairosEngine:
     # ---- Memories (user-retained data) ----
     def add_memory(self, content: str) -> str:
         self.require("memory")
-        return self.knowledge.add_memory(content)
+        mem_id = self.knowledge.add_memory(content)
+        self.spawn_graph_extract(content, source="remember", kind="note")
+        return mem_id
 
     def list_memories(self) -> list:
         self.require("memory")
@@ -576,6 +768,11 @@ class KairosEngine:
         self.require("predict")
         try:
             seed = build_seed(question, files=files, links=links, text=text, engine=self)
+            cfg = self._graph_cfg()
+            if self.graph and cfg.get("use_in_predict", True):
+                g = self.graph_context(question)
+                if g:
+                    seed = f"{seed}\n\n{g}"
             pid = self.predictive_store.add(question, source=mode, status="running")
 
             mirofish_enabled = self.config.get("mirofish", {}).get("enabled", False)
@@ -609,6 +806,7 @@ class KairosEngine:
             self.predictive_store.update(pid, status="done", report=report)
             # Also save to retention so it's recallable later.
             self.knowledge.add_memory(f"[Prediction] {question}\n{report[:3000]}")
+            self.spawn_graph_extract(report, source="prediction", kind="prediction")
             return {"id": pid, "question": question, "source": source, "report": report}
         except Exception as e:
             self.record_error("predict", e)
@@ -622,7 +820,9 @@ class KairosEngine:
         self.learning.record(context, error)
 
     def reflect(self) -> str:
-        return reflect(self)
+        analysis = reflect(self)
+        self.spawn_graph_extract(analysis, source="reflection", kind="lesson")
+        return analysis
 
     def recent_lessons(self, limit: int = 10) -> list:
         return self.learning.recent_lessons(limit)
@@ -682,6 +882,15 @@ class KairosEngine:
         self.learning.close()
         self.predictive_store.close()
         self.mirofish.close()
+        try:
+            if self.graph:
+                self.graph.close()
+        except Exception:
+            pass
+        try:
+            self.pending.close()
+        except Exception:
+            pass
         self.llm.close()
         try:
             if PID_FILE.exists():

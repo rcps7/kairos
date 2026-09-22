@@ -16,3 +16,4 @@ openpyxl>=3.1
 pypdf>=4.0
 python-docx>=1.1
 Pillow>=10.0
+ladybug>=0.20
