@@ -70,6 +70,7 @@ class GraphMemory:
         self.error = info.get("error")
         self.available = bool(info.get("available"))
         self.vector_available = False
+        self.embeddings_available = embed_fn is not None
         self.dedup_distance = dedup_distance
         self._embed_fn = embed_fn
         self._db_path = str(db_path)
@@ -155,12 +156,17 @@ class GraphMemory:
         return self._embed([text or ""])[0]
 
     def _embed(self, texts):
-        if self._embed_fn is None:
+        if self._embed_fn is None or not self.embeddings_available:
             return [[0.0] * EMBED_DIM for _ in texts]
         try:
-            out = self._embed_fn(list(texts))
-        except TypeError:
-            out = self._embed_fn(input=list(texts))
+            try:
+                out = self._embed_fn(list(texts))
+            except TypeError:
+                out = self._embed_fn(input=list(texts))
+        except Exception as e:
+            logger.warning("Embedding function unavailable (%s); using keyword mode.", e)
+            self.embeddings_available = False
+            return [[0.0] * EMBED_DIM for _ in texts]
         vecs = []
         for v in out:
             v = list(v)
@@ -168,6 +174,10 @@ class GraphMemory:
                 v = (v + [0.0] * EMBED_DIM)[:EMBED_DIM]
             vecs.append(v)
         return vecs
+
+    @property
+    def semantic_ready(self) -> bool:
+        return self.vector_available and self.embeddings_available
 
     # ------------------------------------------------------------------
     # Ingestion (write)
@@ -194,7 +204,7 @@ class GraphMemory:
                 continue
             eid = entity_id(kind, name)
             # Dedup against existing nodes via the vector index.
-            if self.vector_available:
+            if self.semantic_ready:
                 try:
                     rows = (await self._conn.execute(
                         "CALL QUERY_VECTOR_INDEX('Entity','entity_vec',$q,$k) "
@@ -288,7 +298,7 @@ class GraphMemory:
         entities = []
         memories = []
 
-        if self.vector_available:
+        if self.semantic_ready:
             try:
                 srows = (await self._conn.execute(
                     "CALL QUERY_VECTOR_INDEX('Entity','entity_vec',$q,$k) "
@@ -324,11 +334,11 @@ class GraphMemory:
             try:
                 mrows = (await self._conn.execute(
                     "CALL QUERY_VECTOR_INDEX('Memory','memory_vec',$q,$k) "
-                    "RETURN node.text, node.kind, distance;",
+                    "RETURN node.id, node.text, node.kind, distance;",
                     {"q": qv, "k": k_memories},
                 )).get_all()
-                for text, kind, dist in mrows:
-                    memories.append({"text": text, "kind": kind, "distance": dist})
+                for mid, text, kind, dist in mrows:
+                    memories.append({"id": mid, "text": text, "kind": kind, "distance": dist})
             except Exception:
                 logger.exception("Memory retrieval failed.")
         else:
@@ -365,14 +375,14 @@ class GraphMemory:
             return []
         try:
             rows = (await self._conn.execute(
-                "MATCH (m:Memory) RETURN m.text, m.kind LIMIT 500;"
+                "MATCH (m:Memory) RETURN m.id, m.text, m.kind LIMIT 500;"
             )).get_all()
         except Exception:
             return []
         out = []
-        for text, kind in rows:
+        for mid, text, kind in rows:
             if any(t in (text or "").lower() for t in terms):
-                out.append({"text": text, "kind": kind, "distance": None})
+                out.append({"id": mid, "text": text, "kind": kind, "distance": None})
             if len(out) >= limit:
                 break
         return out
@@ -405,6 +415,74 @@ class GraphMemory:
         res = await self.aretrieve(query, k_nodes=limit, k_memories=limit)
         return {"entities": res["entities"], "memories": res["memories"],
                 "relations": [r for e in res["entities"] for r in e.get("relations", [])]}
+
+    # ------------------------------------------------------------------
+    # Backfill / memory listing
+    # ------------------------------------------------------------------
+    def backfill(self, items):
+        return self._run(self.abackfill(items))
+
+    def rebuild_vector_indexes(self):
+        return self._run(self.arebuild_vector_indexes())
+
+    async def arebuild_vector_indexes(self):
+        """Drop and recreate the HNSW indexes (e.g. after embedding updates)."""
+        if not self.semantic_ready:
+            return False
+        for table, idx, prop in VECTOR_INDEXES:
+            try:
+                await self._conn.execute(f"CALL DROP_VECTOR_INDEX('{table}', '{idx}');")
+            except Exception:
+                pass
+            try:
+                await self._conn.execute(
+                    f"CALL CREATE_VECTOR_INDEX('{table}','{idx}','{prop}', metric := 'cosine');"
+                )
+            except Exception:
+                logger.warning("Could not rebuild %s", idx)
+        return True
+
+    async def abackfill(self, items):
+        """Insert existing retained data as Memory nodes (no LLM, no entities)."""
+        if not self.available:
+            return 0
+        n = 0
+        for it in items or []:
+            text = (it.get("text") or "").strip()
+            if not text:
+                continue
+            mid = it.get("id") or uuid.uuid4().hex
+            try:
+                await self._conn.execute(
+                    "MERGE (m:Memory {id:$id}) ON CREATE SET m.text=$t, m.kind=$k, "
+                    "m.character=$c, m.source=$s, m.created_at=$now, m.embedding=$emb "
+                    "ON MATCH SET m.text=$t, m.kind=$k, m.embedding=$emb;",
+                    {
+                        "id": mid, "t": text[:8000],
+                        "k": it.get("kind", "retained"),
+                        "c": it.get("character", ""),
+                        "s": it.get("source", "retention"),
+                        "now": it.get("created_at") or _now(),
+                        "emb": self._embed_one(text),
+                    },
+                )
+                n += 1
+            except Exception:
+                logger.exception("Backfill failed for %s", mid)
+        return n
+
+    def list_memories(self, limit: int = 200):
+        return self._run(self.alist_memories(limit))
+
+    async def alist_memories(self, limit: int = 200):
+        if not self.available:
+            return []
+        rows = (await self._conn.execute(
+            "MATCH (m:Memory) RETURN m.id, m.text, m.kind, m.source, m.created_at "
+            "ORDER BY m.created_at DESC LIMIT $lim;", {"lim": limit}
+        )).get_all()
+        return [{"id": r[0], "text": r[1], "kind": r[2], "source": r[3],
+                 "created_at": str(r[4])} for r in rows]
 
     # ------------------------------------------------------------------
     # CRUD / management

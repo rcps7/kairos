@@ -41,6 +41,7 @@ DEFAULT_CONFIG = {
     "graph_memory": {
         "enabled": True,
         "db_path": None,
+        "backfilled": False,
         "require_approval": True,
         "auto_approve": False,
         "extract_on_chat": True,

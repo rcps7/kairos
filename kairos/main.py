@@ -46,6 +46,11 @@ MAX_TOOL_ROUNDS = 3
 
 class KairosEngine:
     def __init__(self):
+        try:
+            from kairos.win_runtime import ensure_vc_runtime
+            ensure_vc_runtime()
+        except Exception:
+            pass
         self.config = load_config()
         self.characters = CharacterManager(
             self.config.get("storage_root", ""),
@@ -74,6 +79,8 @@ class KairosEngine:
         self.graph = None
         self.on_pending_graph = None
         self._init_graph_memory()
+        if self.graph:
+            threading.Thread(target=self.backfill_graph_memory, daemon=True).start()
         self._loop = None
         self._thread = None
         self._retention_thread = None
@@ -302,6 +309,50 @@ class KairosEngine:
         threading.Thread(
             target=self.ingest_graph, args=(text, source, kind), daemon=True
         ).start()
+
+    def backfill_graph_memory(self, force: bool = False) -> int:
+        """Copy existing retained memories + document summaries into the graph."""
+        cfg = self._graph_cfg()
+        if not self.graph or not cfg.get("enabled", True):
+            return 0
+        if cfg.get("backfilled") and not force:
+            return 0
+        from datetime import datetime
+
+        def _dt(s):
+            try:
+                return datetime.fromisoformat(s) if s else None
+            except Exception:
+                return None
+
+        items = []
+        try:
+            for mid, content, created in self.knowledge.list_memories():
+                items.append({"id": f"kn:{mid}", "text": content, "kind": "retained",
+                              "source": "retention", "created_at": _dt(created)})
+        except Exception:
+            pass
+        try:
+            for row in self.knowledge.get_all_documents():
+                doc_id, url, summary, created = (list(row) + [None, None, None, None])[:4]
+                if summary:
+                    items.append({"id": f"doc:{doc_id}", "text": f"{url or ''}\n{summary}",
+                                  "kind": "document", "source": "web", "created_at": _dt(created)})
+        except Exception:
+            pass
+        n = self.graph.backfill(items) if items else 0
+        try:
+            c = load_config()
+            c.setdefault("graph_memory", {})["backfilled"] = True
+            save_config(c)
+            self.config = load_config()
+        except Exception:
+            pass
+        logger.info("Graph memory backfill: %d item(s).", n)
+        return n
+
+    def graph_list_memories(self, limit: int = 200) -> list:
+        return self.graph.list_memories(limit) if self.graph else []
 
     def _notify_pending(self, pid: str, proposal: dict):
         try:
@@ -1096,6 +1147,11 @@ def has_llm_provider(cfg: dict) -> bool:
 
 
 def main():
+    try:
+        from kairos.win_runtime import ensure_vc_runtime
+        ensure_vc_runtime()
+    except Exception:
+        pass
     app = QApplication(sys.argv)
 
     cfg = load_config()

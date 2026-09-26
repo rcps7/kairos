@@ -1358,6 +1358,11 @@ class GraphDialog(QDialog):
             item = QTreeWidgetItem(["entity", e["name"], f"{e['kind']} | mentions={e.get('mentions',0)} | {e.get('summary','')}"])
             item.setData(0, Qt.UserRole, ("entity", e["id"], None, None))
             self.tree.addTopLevelItem(item)
+        for m in self.engine.graph_list_memories():
+            item = QTreeWidgetItem(["memory", (m.get("kind") or "memory"),
+                                    (m.get("text") or "")[:200]])
+            item.setData(0, Qt.UserRole, ("memory", m.get("id"), None, None))
+            self.tree.addTopLevelItem(item)
 
     def search(self):
         q = self.search_edit.text().strip()
@@ -1378,7 +1383,7 @@ class GraphDialog(QDialog):
             item.setExpanded(True)
         for m in res.get("memories", []):
             item = QTreeWidgetItem(["memory", (m.get("kind") or "note"), (m.get("text") or "")[:200]])
-            item.setData(0, Qt.UserRole, ("memory", m.get("text"), None, None))
+            item.setData(0, Qt.UserRole, ("memory", m.get("id") or m.get("text"), None, None))
             self.tree.addTopLevelItem(item)
 
     def _selected(self):
@@ -1422,16 +1427,10 @@ class GraphDialog(QDialog):
                 return
             self.engine.graph_delete_entity(sel[1])
         elif kind == "memory":
-            if QMessageBox.question(self, "Delete", "Delete this memory note?",
+            if QMessageBox.question(self, "Delete", "Delete this memory note from the graph?",
                                     QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
                 return
-            # match memory by text (ids not surfaced in search UI)
-            mid = sel[1]
-            for m in self.engine.graph_search(mid, limit=5).get("memories", []):
-                if m.get("text") == mid:
-                    break
-            QMessageBox.information(self, "Kairos", "Memory deletion by text is not available; use Clear All.")
-            return
+            self.engine.graph_delete_memory(sel[1])
         elif kind == "relation":
             QMessageBox.information(self, "Kairos", "Select the parent entity and use Clear All, or edit via the graph.")
             return
