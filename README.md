@@ -175,7 +175,7 @@ buttons**, and is divided into three panes:
 | Menu | Actions |
 |------|---------|
 | **File** | New Session (`Ctrl+N`), Exit, Kill Switch (Emergency) |
-| **Edit** | LLM Providers, Storage Settings, Email Settings, Peripheral Control, Retention (Delete Expired), Skills, Agent Character… |
+| **Edit** | LLM Providers, Storage Settings, Email Settings, Telegram Settings…, Peripheral Control, Retention (Delete Expired), Skills, Agent Character…, Knowledge Graph…, Pending Knowledge… |
 | **View** | Self-Reflect, Show Lessons, Refresh Status |
 | **Window** | Minimize, Maximize |
 | **Help** | About Kairos |

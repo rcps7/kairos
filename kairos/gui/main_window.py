@@ -431,6 +431,71 @@ class EmailDialog(QDialog):
         super().accept()
 
 
+class TelegramDialog(QDialog):
+    def __init__(self, engine, parent=None):
+        super().__init__(parent)
+        self.engine = engine
+        self.setWindowTitle("Telegram Settings")
+        self.setStyleSheet(_dialog_style())
+        self.resize(520, 220)
+        layout = QFormLayout(self)
+        layout.setSpacing(12)
+
+        self.token_edit = QLineEdit()
+        self.token_edit.setEchoMode(QLineEdit.Password)
+        self.token_edit.setPlaceholderText("Bot token from @BotFather")
+        current = engine.config.get("telegram_token") or ""
+        self.token_edit.setText(current)
+        layout.addRow("Bot Token:", self.token_edit)
+
+        self.show_check = QCheckBox("Show token")
+        self.show_check.toggled.connect(
+            lambda on: self.token_edit.setEchoMode(
+                QLineEdit.Normal if on else QLineEdit.Password
+            )
+        )
+        layout.addRow("", self.show_check)
+
+        status = "connected" if getattr(engine.telegram, "running", False) else "not running"
+        self.status_label = QLabel(f"Telegram bot is currently {status}.")
+        self.status_label.setStyleSheet(f"color: {TEXT_GREY};")
+        layout.addRow(self.status_label)
+
+        hint = QLabel("Create a bot with \u0040BotFather in Telegram and paste its token.\n"
+                      "Saving restarts the bot with the new token.")
+        hint.setStyleSheet(f"color: {TEXT_GREY};")
+        layout.addRow(hint)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addRow(buttons)
+
+    def accept(self):
+        token = self.token_edit.text().strip()
+        if not token:
+            try:
+                import keyring
+                keyring.delete_password("kairos", "telegram_token")
+            except Exception:
+                pass
+        self.engine.config = _merge_save(
+            lambda c: c.__setitem__("telegram_token", token or None)
+        )
+        try:
+            self.engine.restart_telegram()
+            self.engine.config = __import__("kairos.config", fromlist=["load_config"]).load_config()
+        except Exception as e:
+            QMessageBox.warning(self, "Kairos", f"Saved, but the bot did not start:\n{e}")
+            super().accept()
+            return
+        if token:
+            QMessageBox.information(self, "Kairos", "Telegram settings saved and bot restarted.")
+        else:
+            QMessageBox.information(self, "Kairos", "Telegram token cleared.")
+        super().accept()
+
+
 class PeripheralDialog(QDialog):
     def __init__(self, engine, parent=None):
         super().__init__(parent)
@@ -1915,6 +1980,7 @@ class KairosGUI(QMainWindow):
         edit_menu.addAction("LLM Providers", self.open_provider_dialog)
         edit_menu.addAction("Storage Settings", self.open_storage_dialog)
         edit_menu.addAction("Email Settings", self.open_email_dialog)
+        edit_menu.addAction("Telegram Settings\u2026", self.open_telegram_dialog)
         edit_menu.addAction("MiroFish Settings", self.open_mirofish_dialog)
         edit_menu.addSeparator()
         edit_menu.addAction("Peripheral Control", self.open_peripheral_dialog)
@@ -2408,6 +2474,7 @@ class KairosGUI(QMainWindow):
             ("LLM Providers", self.open_provider_dialog),
             ("Storage", self.open_storage_dialog),
             ("Email", self.open_email_dialog),
+            ("Telegram", self.open_telegram_dialog),
             ("Peripherals", self.open_peripheral_dialog),
             ("Retention", self.open_retention_dialog),
         ]
@@ -2826,6 +2893,10 @@ class KairosGUI(QMainWindow):
 
     def open_email_dialog(self):
         EmailDialog(self.engine, self).exec()
+
+    def open_telegram_dialog(self):
+        TelegramDialog(self.engine, self).exec()
+        self.refresh_status_bar()
 
     def open_mirofish_dialog(self):
         MiroFishDialog(self.engine, self).exec()

@@ -850,6 +850,18 @@ class KairosEngine:
         if self._loop is not None:
             self._loop.call_soon_threadsafe(self._loop.stop)
 
+    def restart_telegram(self):
+        """Reload the config and (re)start the Telegram bot with the new token."""
+        try:
+            self.stop_telegram()
+        except Exception:
+            pass
+        self._loop = None
+        time.sleep(0.6)
+        self.config = load_config()
+        self.telegram = TelegramBot(self)
+        self.start_telegram()
+
     # ---- Background retention sweep ----
     def start_retention_loop(self):
         def run():
