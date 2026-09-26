@@ -15,6 +15,7 @@ an FTS index.
 """
 
 import asyncio
+import importlib.util
 import logging
 import re
 import threading
@@ -65,10 +66,9 @@ class GraphMemory:
 
     def __init__(self, db_path, embed_fn=None, max_concurrent: int = 4,
                  dedup_distance: float = 0.15):
-        info = ensure_runtime()
-        self.info = info
-        self.error = info.get("error")
-        self.available = bool(info.get("available"))
+        self.info = {}
+        self.error = None
+        self.available = False
         self.vector_available = False
         self.embeddings_available = embed_fn is not None
         self.dedup_distance = dedup_distance
@@ -82,16 +82,31 @@ class GraphMemory:
         self._thread = None
         self._io_lock = threading.Lock()
 
-        if self.available:
-            try:
-                import ladybug
-                self._lb = ladybug
-                self._start_loop()
-                self._run(self._ainit())
-            except Exception as e:
-                logger.exception("Failed to initialise graph memory.")
-                self.available = False
-                self.error = str(e)
+        # The optional graph backend must be installed before we bother
+        # downloading/assembling its native runtime.
+        if importlib.util.find_spec("ladybug") is None:
+            self.error = ("The 'ladybug' package is not installed for this Python "
+                          "interpreter. Run: pip install -r requirements.txt")
+            logger.warning("Graph memory disabled: %s", self.error)
+            return
+
+        info = ensure_runtime()
+        self.info = info
+        self.error = info.get("error")
+        self.available = bool(info.get("available"))
+        if not self.available:
+            logger.warning("Graph memory unavailable: %s", self.error)
+            return
+
+        try:
+            import ladybug
+            self._lb = ladybug
+            self._start_loop()
+            self._run(self._ainit())
+        except Exception as e:
+            logger.exception("Failed to initialise graph memory.")
+            self.available = False
+            self.error = str(e)
 
     # ------------------------------------------------------------------
     # Event-loop plumbing
