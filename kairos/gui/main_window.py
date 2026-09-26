@@ -461,6 +461,16 @@ class TelegramDialog(QDialog):
         self.status_label.setStyleSheet(f"color: {TEXT_GREY};")
         layout.addRow(self.status_label)
 
+        verify_row = QHBoxLayout()
+        self.verify_btn = QPushButton("Test Token")
+        self.verify_btn.clicked.connect(self._verify)
+        self.verify_result = QLabel("")
+        self.verify_result.setStyleSheet(f"color: {TEXT_GREY};")
+        self.verify_result.setWordWrap(True)
+        verify_row.addWidget(self.verify_btn)
+        verify_row.addWidget(self.verify_result, 1)
+        layout.addRow("", verify_row)
+
         hint = QLabel("Create a bot with \u0040BotFather in Telegram and paste its token.\n"
                       "Saving restarts the bot with the new token.")
         hint.setStyleSheet(f"color: {TEXT_GREY};")
@@ -471,8 +481,41 @@ class TelegramDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addRow(buttons)
 
-    def accept(self):
+    def _verify(self):
+        from kairos.telegram_bot import validate_token_format
         token = self.token_edit.text().strip()
+        if not token:
+            self.verify_result.setText("Enter a token first.")
+            return
+        if not validate_token_format(token):
+            self.verify_result.setText("Format looks wrong (expected <digits>:<secret>).")
+            return
+        try:
+            import httpx
+            r = httpx.get(f"https://api.telegram.org/bot{token}/getMe", timeout=15)
+            data = r.json()
+            if r.status_code == 200 and data.get("ok"):
+                u = data.get("result", {})
+                self.verify_result.setText(
+                    f"OK \u2014 bot @{u.get('username')} ({u.get('first_name', '')})"
+                )
+            else:
+                self.verify_result.setText(
+                    f"Telegram: {data.get('description', 'invalid token (401)')}"
+                )
+        except Exception as e:
+            self.verify_result.setText(f"Could not reach Telegram: {e}")
+
+    def accept(self):
+        from kairos.telegram_bot import validate_token_format
+        token = self.token_edit.text().strip()
+        if token and not validate_token_format(token):
+            QMessageBox.warning(
+                self, "Kairos",
+                "That does not look like a valid bot token.\nExpected format: "
+                "<digits>:<secret> (e.g. 123456789:ABCdef...).",
+            )
+            return
         if not token:
             try:
                 import keyring
@@ -490,7 +533,20 @@ class TelegramDialog(QDialog):
             super().accept()
             return
         if token:
-            QMessageBox.information(self, "Kairos", "Telegram settings saved and bot restarted.")
+            # Give the bot thread a moment to authenticate, then report the result.
+            import time as _time
+            for _ in range(20):
+                if getattr(self.engine.telegram, "running", False):
+                    break
+                if getattr(self.engine.telegram, "last_error", None):
+                    break
+                _time.sleep(0.25)
+            if getattr(self.engine.telegram, "running", False):
+                QMessageBox.information(self, "Kairos", "Telegram connected. Bot is running.")
+            else:
+                err = getattr(self.engine.telegram, "last_error", None) or "unknown error"
+                QMessageBox.warning(self, "Kairos",
+                                    f"Telegram could not start:\n{err}")
         else:
             QMessageBox.information(self, "Kairos", "Telegram token cleared.")
         super().accept()

@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 import threading
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -11,19 +12,33 @@ from kairos import config
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+TOKEN_RE = re.compile(r"^\d{6,}:[A-Za-z0-9_\-]{30,}$")
+
+
+def validate_token_format(token: str) -> bool:
+    """Basic shape check for a Telegram bot token (id:secret)."""
+    return bool(TOKEN_RE.match((token or "").strip()))
+
 
 class TelegramBot:
     def __init__(self, orchestration_engine):
         self.engine = orchestration_engine
         self.app = None
         self.running = False
+        self.last_error = None
         self._chat_ids = set()
 
     async def start(self):
         cfg = config.load_config()
-        token = cfg.get("telegram_token")
+        token = (cfg.get("telegram_token") or "").strip()
         if not token:
-            logger.error("Telegram token not found in config!")
+            self.last_error = "No Telegram token configured."
+            logger.error("Telegram token not found. Set it in Edit -> Telegram Settings.")
+            return
+        if not validate_token_format(token):
+            self.last_error = ("Telegram token format looks wrong (expected "
+                               "'<digits>:<secret>').")
+            logger.error("Telegram token format is invalid. Fix it in Edit -> Telegram Settings.")
             return
 
         try:
@@ -65,13 +80,19 @@ class TelegramBot:
             await self.app.start()
             await self.app.updater.start_polling()
             self.running = True
+            self.last_error = None
             logger.info("Telegram Bot started.")
         except InvalidToken:
-            logger.error("Invalid Telegram bot token. Re-run the app and enter a valid token.")
+            self.last_error = ("Telegram rejected the token (401 Unauthorized). Create or "
+                               "regenerate it with @BotFather, then set it in "
+                               "Edit -> Telegram Settings.")
+            logger.error(self.last_error)
         except TelegramError as e:
-            logger.error(f"Telegram error: {e}")
+            self.last_error = f"Telegram error: {e}"
+            logger.error(self.last_error)
         except Exception as e:
-            logger.error(f"Unexpected Telegram error: {e}")
+            self.last_error = f"Unexpected Telegram error: {e}"
+            logger.error(self.last_error)
 
     async def stop(self):
         if self.app and self.running:
