@@ -9,9 +9,15 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                                QListWidgetItem, QLabel, QDialogButtonBox,
                                QMessageBox, QToolBar, QGroupBox, QFrame,
                                QGridLayout, QComboBox, QTreeWidget, QTreeWidgetItem,
-                               QScrollArea, QMenu)
-from PySide6.QtCore import Qt, Signal, QThread, QSize, QTimer
+                               QScrollArea, QMenu, QTabWidget)
+from PySide6.QtCore import Qt, Signal, QThread, QSize, QTimer, QBuffer, QByteArray, QIODevice
 from PySide6.QtGui import QAction, QFont, QColor, QPalette, QIcon, QTextCursor, QPixmap
+
+try:
+    from PySide6.QtMultimedia import QCamera, QMediaCaptureSession, QVideoSink
+    _MULTIMEDIA = True
+except Exception:
+    _MULTIMEDIA = False
 
 from kairos.gui.voice_widgets import VoiceWorker, SpeakWorker, VoiceMeter, MoodIndicator
 from kairos.characters_presets import ALL_CAPABILITIES, CAPABILITY_LABELS
@@ -1480,7 +1486,7 @@ class MyCallSignDialog(QDialog):
         cfg = engine.config.get("collaboration", {})
         form = QFormLayout()
         self.transport = QComboBox()
-        self.transport.addItems(["direct", "ts", "public"])
+        self.transport.addItems(["direct", "ts", "public", "ngrok"])
         self.transport.setCurrentText(cfg.get("transport", "direct"))
         self.port = QLineEdit(str(cfg.get("listen_port", 7777)))
         form.addRow("Transport:", self.transport)
@@ -1633,21 +1639,35 @@ class IncomingRequestDialog(QDialog):
 
 
 class CollaborationWindow(QDialog):
+    sig_project = Signal()
+    sig_remote_video = Signal(bytes)
+
     def __init__(self, engine, session, parent=None):
         super().__init__(parent)
         self.engine = engine
         self.session = session
+        self._proj = None
+        self._applying = False
+        self._audio = None
+        self._camera = None
+        self._cap_session = None
+        self._video_sink = None
         self.setWindowTitle(f"Collaboration - {session.remote_label or session.remote_fp[:12]}")
         self.setStyleSheet(_dialog_style())
-        self.resize(720, 560)
+        self.resize(780, 620)
         layout = QVBoxLayout(self)
         header = QLabel(f"Connected to <b>{html.escape(session.remote_label or session.remote_fp[:12])}</b>"
                         f"  ·  FP {session.remote_fp[:16]}…")
         header.setStyleSheet(f"color: {GREEN};")
         layout.addWidget(header)
+
+        tabs = QTabWidget()
+
+        chat_tab = QWidget()
+        cl = QVBoxLayout(chat_tab)
         self.view = QTextBrowser()
         self.view.setStyleSheet(f"background-color: {BG_INPUT}; color: {TEXT};")
-        layout.addWidget(self.view, 1)
+        cl.addWidget(self.view, 1)
         row = QHBoxLayout()
         self.input = QLineEdit()
         self.input.setPlaceholderText("Type a message...")
@@ -1655,8 +1675,171 @@ class CollaborationWindow(QDialog):
         send_btn = QPushButton("Send")
         send_btn.setStyleSheet(f"background-color: {GREEN_DIM}; color: {BG_DARK}; font-weight: bold;")
         send_btn.clicked.connect(self._send)
-        row.addWidget(self.input, 1); row.addWidget(send_btn)
-        layout.addLayout(row)
+        row.addWidget(self.input, 1)
+        row.addWidget(send_btn)
+        cl.addLayout(row)
+        tabs.addTab(chat_tab, "Chat")
+
+        proj_tab = QWidget()
+        pl = QVBoxLayout(proj_tab)
+        pl.addWidget(QLabel("Shared project notes (CRDT-synced with your peer):"))
+        self.notes = QTextEdit()
+        self.notes.setPlaceholderText("Collaborate on notes here — both sides see changes.")
+        self.notes.setStyleSheet(f"background-color: {BG_INPUT}; color: {TEXT};")
+        pl.addWidget(self.notes, 1)
+        tabs.addTab(proj_tab, "Project")
+
+        call_tab = QWidget()
+        vl = QVBoxLayout(call_tab)
+        ctrl = QHBoxLayout()
+        self.voice_btn = QPushButton("Start Voice")
+        self.voice_btn.setCheckable(True)
+        self.voice_btn.toggled.connect(self._toggle_voice)
+        self.mute_btn = QPushButton("Mute Speaker")
+        self.mute_btn.setCheckable(True)
+        self.mute_btn.toggled.connect(self._toggle_mute)
+        self.video_btn = QPushButton("Start Camera")
+        self.video_btn.setCheckable(True)
+        self.video_btn.toggled.connect(self._toggle_video)
+        ctrl.addWidget(self.voice_btn)
+        ctrl.addWidget(self.mute_btn)
+        ctrl.addWidget(self.video_btn)
+        ctrl.addStretch()
+        vl.addLayout(ctrl)
+        self.local_video = QLabel("Local camera (off)")
+        self.local_video.setAlignment(Qt.AlignCenter)
+        self.local_video.setMinimumHeight(160)
+        self.local_video.setStyleSheet(f"background-color: {BG_INPUT}; color: {TEXT_GREY}; border: 1px solid {BORDER};")
+        self.remote_video = QLabel("Remote camera (off)")
+        self.remote_video.setAlignment(Qt.AlignCenter)
+        self.remote_video.setMinimumHeight(160)
+        self.remote_video.setStyleSheet(f"background-color: {BG_INPUT}; color: {TEXT_GREY}; border: 1px solid {BORDER};")
+        vids = QHBoxLayout()
+        vids.addWidget(self.local_video, 1)
+        vids.addWidget(self.remote_video, 1)
+        vl.addLayout(vids, 1)
+        self.call_status = QLabel("")
+        self.call_status.setStyleSheet(f"color: {TEXT_GREY};")
+        vl.addWidget(self.call_status)
+        tabs.addTab(call_tab, "Call")
+
+        layout.addWidget(tabs, 1)
+        self.sig_project.connect(self._refresh_project)
+        self.sig_remote_video.connect(self._show_remote_video)
+        self._bind_project()
+
+    # ---- voice ----
+    def _toggle_voice(self, on):
+        if on:
+            try:
+                from kairos.collab.media import AudioStream
+                self._audio = AudioStream(
+                    on_frame=lambda pcm: self.engine.collab.send_audio(self.session.remote_fp, pcm))
+                self._audio.start()
+                self.voice_btn.setText("Stop Voice")
+                if getattr(self.engine, "on_collab_audio", None) is None:
+                    self.engine.on_collab_audio = (
+                        lambda s, d: self._audio and self._audio.feed(d))
+                self.call_status.setText("Voice active (16 kHz PCM over the encrypted link).")
+            except Exception as e:
+                self.call_status.setText(f"Voice failed: {e}")
+                self.voice_btn.setChecked(False)
+        else:
+            if self._audio:
+                self._audio.stop()
+                self._audio = None
+            self.voice_btn.setText("Start Voice")
+            self.call_status.setText("Voice stopped.")
+
+    def _toggle_mute(self, on):
+        if self._audio:
+            self._audio.speaker_muted = on
+        self.mute_btn.setText("Unmute Speaker" if on else "Mute Speaker")
+
+    # ---- video ----
+    def _toggle_video(self, on):
+        if not _MULTIMEDIA:
+            self.call_status.setText("QtMultimedia not available; video disabled.")
+            self.video_btn.setChecked(False)
+            return
+        if on:
+            try:
+                self._camera = QCamera()
+                self._cap_session = QMediaCaptureSession()
+                self._video_sink = QVideoSink()
+                self._cap_session.setCamera(self._camera)
+                self._cap_session.setVideoOutput(self._video_sink)
+                self._video_sink.videoFrameChanged.connect(self._on_video_frame)
+                self._camera.start()
+                self.video_btn.setText("Stop Camera")
+                self.call_status.setText("Camera active (JPEG frames to peer).")
+            except Exception as e:
+                self.call_status.setText(f"Camera failed: {e}")
+                self.video_btn.setChecked(False)
+        else:
+            try:
+                if self._camera:
+                    self._camera.stop()
+            except Exception:
+                pass
+            self._camera = None
+            self.video_btn.setText("Start Camera")
+            self.local_video.setText("Local camera (off)")
+            self.call_status.setText("Camera stopped.")
+
+    def _on_video_frame(self, frame):
+        try:
+            img = frame.toImage()
+            if img.isNull():
+                return
+            small = img.scaled(320, 240, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            pix = QPixmap.fromImage(small)
+            self.local_video.setPixmap(pix)
+            ba = QByteArray()
+            buf = QBuffer(ba)
+            buf.open(QIODevice.WriteOnly)
+            small.save(buf, "JPG", 55)
+            buf.close()
+            self.engine.collab.send_video(self.session.remote_fp, bytes(ba))
+        except Exception:
+            pass
+
+    def _show_remote_video(self, data):
+        try:
+            pix = QPixmap()
+            if pix.loadFromData(bytes(data)):
+                self.remote_video.setPixmap(pix)
+        except Exception:
+            pass
+
+    def _bind_project(self):
+        collab = getattr(self.engine, "collab", None)
+        if not collab:
+            return
+        proj = collab.get_project(self.session.remote_fp)
+        self._proj = proj
+        if proj:
+            self._applying = True
+            try:
+                self.notes.setPlainText(proj.get_notes())
+            finally:
+                self._applying = False
+            proj.on_refresh = lambda: self.sig_project.emit()
+            self.notes.textChanged.connect(self._on_notes_edited)
+
+    def _on_notes_edited(self):
+        if self._applying or not self._proj:
+            return
+        self._proj.set_notes(self.notes.toPlainText())
+
+    def _refresh_project(self):
+        if not self._proj:
+            return
+        self._applying = True
+        try:
+            self.notes.setPlainText(self._proj.get_notes())
+        finally:
+            self._applying = False
 
     def append_peer(self, text):
         self._append("peer", text)
@@ -1676,6 +1859,246 @@ class CollaborationWindow(QDialog):
         color = {"me": "#58a6ff", "peer": GREEN, "system": TEXT_GREY}.get(who, TEXT)
         label = {"me": "You", "peer": "Peer", "system": "system"}.get(who, who)
         self.view.append(f'<span style="color:{color}"><b>{label}:</b> {html.escape(text)}</span>')
+
+
+class SendFileWorker(QThread):
+    ok = Signal(dict)
+    failed = Signal(str)
+
+    def __init__(self, engine, peer_fp, path):
+        super().__init__()
+        self.engine = engine
+        self.peer_fp = peer_fp
+        self.path = path
+
+    def run(self):
+        try:
+            self.ok.emit(self.engine.collab.send_file(self.peer_fp, self.path))
+        except Exception as e:
+            self.failed.emit(str(e))
+
+
+class SendFileDialog(QDialog):
+    def __init__(self, engine, sessions, parent=None):
+        super().__init__(parent)
+        self.engine = engine
+        self.sessions = sessions
+        self.setWindowTitle("Send File to Peer")
+        self.setStyleSheet(_dialog_style())
+        self.resize(560, 200)
+        layout = QFormLayout(self)
+        layout.setSpacing(10)
+        self.peer = QComboBox()
+        for s in sessions:
+            self.peer.addItem(s.remote_label or s.remote_fp[:12], s.remote_fp)
+        layout.addRow("Peer:", self.peer)
+        path_row = QHBoxLayout()
+        self.path_edit = QLineEdit()
+        browse = QPushButton("Browse…")
+        browse.clicked.connect(self._browse)
+        path_row.addWidget(self.path_edit, 1)
+        path_row.addWidget(browse)
+        layout.addRow("File:", path_row)
+        self.status = QLabel("")
+        self.status.setStyleSheet(f"color: {TEXT_GREY};")
+        layout.addRow(self.status)
+        row = QHBoxLayout()
+        self.send_btn = QPushButton("Send")
+        self.send_btn.setStyleSheet(f"background-color: {GREEN_DIM}; color: {BG_DARK}; font-weight: bold;")
+        self.send_btn.clicked.connect(self._send)
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.accept)
+        row.addWidget(self.send_btn); row.addStretch(); row.addWidget(close_btn)
+        layout.addRow(row)
+
+    def _browse(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Select file to send")
+        if path:
+            self.path_edit.setText(path)
+
+    def _send(self):
+        path = self.path_edit.text().strip()
+        if not path:
+            return
+        fp = self.peer.currentData()
+        self.send_btn.setEnabled(False)
+        self.status.setText("Sending (waiting for peer acceptance)…")
+        self._worker = SendFileWorker(self.engine, fp, path)
+        self._worker.ok.connect(self._ok)
+        self._worker.failed.connect(self._fail)
+        self._worker.start()
+
+    def _ok(self, info):
+        self.send_btn.setEnabled(True)
+        self.status.setText(f"Sent: {info.get('name')} ({info.get('size')} bytes)")
+
+    def _fail(self, msg):
+        self.send_btn.setEnabled(True)
+        self.status.setText(f"Failed: {msg}")
+
+
+class FederatedLlmWorker(QThread):
+    ok = Signal(dict)
+    failed = Signal(str)
+
+    def __init__(self, engine, peer_fp, prompt, ask_local):
+        super().__init__()
+        self.engine = engine
+        self.peer_fp = peer_fp
+        self.prompt = prompt
+        self.ask_local = ask_local
+
+    def run(self):
+        out = {}
+        try:
+            if self.ask_local:
+                try:
+                    out["local"] = self.engine.ask_llm(self.prompt, use_character=False)
+                except Exception as e:
+                    out["local"] = f"(local error: {e})"
+            out["peer"] = self.engine.collab.federated_task(self.peer_fp, self.prompt)
+            self.ok.emit(out)
+        except Exception as e:
+            self.failed.emit(str(e))
+
+
+class FederatedDialog(QDialog):
+    def __init__(self, engine, sessions, parent=None):
+        super().__init__(parent)
+        self.engine = engine
+        self.sessions = sessions
+        self.setWindowTitle("Federated LLM Task")
+        self.setStyleSheet(_dialog_style())
+        self.resize(720, 560)
+        layout = QVBoxLayout(self)
+        top = QFormLayout()
+        self.peer = QComboBox()
+        for s in sessions:
+            self.peer.addItem(s.remote_label or s.remote_fp[:12], s.remote_fp)
+        top.addRow("Peer:", self.peer)
+        self.ask_local = QCheckBox("Also ask my own LLM and show both")
+        self.ask_local.setChecked(True)
+        top.addRow(self.ask_local)
+        layout.addLayout(top)
+        layout.addWidget(QLabel("Prompt:"))
+        self.prompt = QTextEdit()
+        self.prompt.setFixedHeight(90)
+        layout.addWidget(self.prompt)
+        self.ask_btn = QPushButton("Ask")
+        self.ask_btn.setStyleSheet(f"background-color: {GREEN_DIM}; color: {BG_DARK}; font-weight: bold;")
+        self.ask_btn.clicked.connect(self._ask)
+        layout.addWidget(self.ask_btn)
+        self.result = QTextBrowser()
+        self.result.setStyleSheet(f"background-color: {BG_INPUT}; color: {TEXT};")
+        layout.addWidget(self.result, 1)
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.accept)
+        layout.addWidget(close_btn)
+
+    def _ask(self):
+        prompt = self.prompt.toPlainText().strip()
+        if not prompt:
+            return
+        self.ask_btn.setEnabled(False)
+        self.result.setHtml("<i>Waiting for peer...</i>")
+        self._worker = FederatedLlmWorker(self.engine, self.peer.currentData(),
+                                          prompt, self.ask_local.isChecked())
+        self._worker.ok.connect(self._ok)
+        self._worker.failed.connect(self._fail)
+        self._worker.start()
+
+    def _ok(self, out):
+        self.ask_btn.setEnabled(True)
+        parts = []
+        if "local" in out:
+            parts.append("<b>Your LLM:</b><br>" + html.escape(out["local"] or "").replace("\n", "<br>"))
+        pr = out.get("peer", {})
+        parts.append("<br><br><b>Peer's LLM (" + html.escape(str(pr.get("model", "peer"))) + "):</b><br>"
+                     + html.escape(pr.get("text", "")).replace("\n", "<br>"))
+        self.result.setHtml("".join(parts))
+
+    def _fail(self, msg):
+        self.ask_btn.setEnabled(True)
+        self.result.setHtml(f"<span style='color:{RED}'>Failed: {html.escape(msg)}</span>")
+
+
+class DiscoverWorker(QThread):
+    ok = Signal(list)
+    failed = Signal(str)
+
+    def __init__(self, engine):
+        super().__init__()
+        self.engine = engine
+
+    def run(self):
+        try:
+            self.ok.emit(self.engine.collab.discover_peers(4.0))
+        except Exception as e:
+            self.failed.emit(str(e))
+
+
+class DiscoverDialog(QDialog):
+    def __init__(self, engine, parent=None):
+        super().__init__(parent)
+        self.engine = engine
+        self.setWindowTitle("Discover Peers (LAN)")
+        self.setStyleSheet(_dialog_style())
+        self.resize(560, 380)
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("Peers advertising on the local network:"))
+        self.list = QListWidget()
+        layout.addWidget(self.list, 1)
+        self.status = QLabel("")
+        self.status.setStyleSheet(f"color: {TEXT_GREY};")
+        layout.addWidget(self.status)
+        row = QHBoxLayout()
+        scan_btn = QPushButton("Scan")
+        scan_btn.clicked.connect(self._scan)
+        self.connect_btn = QPushButton("Connect")
+        self.connect_btn.setStyleSheet(f"background-color: {GREEN_DIM}; color: {BG_DARK}; font-weight: bold;")
+        self.connect_btn.clicked.connect(self._connect)
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.accept)
+        row.addWidget(scan_btn); row.addWidget(self.connect_btn); row.addStretch(); row.addWidget(close_btn)
+        layout.addLayout(row)
+        self._scan()
+
+    def _scan(self):
+        self.status.setText("Scanning LAN (about 4 seconds)…")
+        self.list.clear()
+        self._w = DiscoverWorker(self.engine)
+        self._w.ok.connect(self._populate)
+        self._w.failed.connect(lambda m: self.status.setText(f"Scan failed: {m}"))
+        self._w.start()
+
+    def _populate(self, peers):
+        for p in peers:
+            it = QListWidgetItem(f"{p['name']}  {p['host']}:{p['port']}  fp {p['fp'][:8]}")
+            it.setData(Qt.UserRole, p)
+            self.list.addItem(it)
+        self.status.setText(f"{len(peers)} peer(s) found")
+
+    def _connect(self):
+        it = self.list.currentItem()
+        if not it:
+            return
+        from kairos.collab import callsign as _cs
+        p = it.data(Qt.UserRole)
+        try:
+            cs = _cs.build(p.get("name", "peer"), p.get("transport", "direct"),
+                           p["host"], p["port"], p["fp"])
+        except Exception as e:
+            QMessageBox.warning(self, "Kairos", f"Bad peer record: {e}")
+            return
+        self.connect_btn.setEnabled(False)
+        self.status.setText("Connecting (waiting for peer approval)…")
+        self._cw = ConnectWorker(self.engine, cs)
+        self._cw.ok.connect(lambda s: (self.connect_btn.setEnabled(True),
+                                       QMessageBox.information(self, "Kairos", "Connected."),
+                                       self.accept()))
+        self._cw.failed.connect(lambda m: (self.connect_btn.setEnabled(True),
+                                           self.status.setText(f"Failed: {m}")))
+        self._cw.start()
 
 
 class PredictWorker(QThread):
@@ -2127,6 +2550,10 @@ class KairosGUI(QMainWindow):
     sig_collab_connected = Signal(object)
     sig_collab_chat = Signal(object, str)
     sig_collab_event = Signal(str)
+    sig_collab_file_offer = Signal(object, object)
+    sig_collab_file_done = Signal(object, object)
+    sig_collab_llm_task = Signal(object, object)
+    sig_collab_video = Signal(bytes)
 
     def __init__(self, engine):
         super().__init__()
@@ -2153,6 +2580,14 @@ class KairosGUI(QMainWindow):
         self.engine.on_collab_connected = lambda s: self.sig_collab_connected.emit(s)
         self.engine.on_collab_chat = lambda s, t: self.sig_collab_chat.emit(s, t)
         self.engine.on_collab_event = lambda t: self.sig_collab_event.emit(t)
+        self.engine.on_collab_file_offer = lambda s, o: self.sig_collab_file_offer.emit(s, o)
+        self.engine.on_collab_file_done = lambda s, i: self.sig_collab_file_done.emit(s, i)
+        self.sig_collab_file_offer.connect(self._on_collab_file_offer)
+        self.sig_collab_file_done.connect(self._on_collab_file_done)
+        self.engine.on_collab_llm_task = lambda s, t: self.sig_collab_llm_task.emit(s, t)
+        self.engine.on_collab_video = lambda s, d: self.sig_collab_video.emit(d)
+        self.sig_collab_llm_task.connect(self._on_collab_llm_task)
+        self.sig_collab_video.connect(self._on_collab_video)
 
     def _on_collab_incoming(self, req):
         dlg = IncomingRequestDialog(req, self)
@@ -2177,6 +2612,74 @@ class KairosGUI(QMainWindow):
             self.collab_windows[sess.remote_fp] = win
             win.show()
         win.append_peer(text)
+
+    def _on_collab_file_offer(self, sess, offer):
+        size = offer.get("size", 0)
+        resp = QMessageBox.question(
+            self, "Incoming File",
+            f"{html.escape(offer.get('name', 'file'))} ({size} bytes) from "
+            f"{sess.remote_label or sess.remote_fp[:12]}.\n\n"
+            "Accept and save it to the quarantine folder?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        try:
+            self.engine.collab.resolve_file(offer["transfer_id"], resp == QMessageBox.Yes)
+        except Exception:
+            pass
+
+    def _on_collab_file_done(self, sess, info):
+        ok = info.get("ok")
+        if ok:
+            msg = f"File received: {info.get('name')} saved to {info.get('path')}"
+        else:
+            msg = f"File transfer failed verification: {info.get('name')}"
+        self._append_bubble("Collaboration", msg, "system", GREEN if ok else RED)
+
+    def open_send_file_dialog(self):
+        collab = getattr(self.engine, "collab", None)
+        if not collab:
+            QMessageBox.information(self, "Kairos", "Collaboration is not enabled.")
+            return
+        sessions = collab.sessions()
+        if not sessions:
+            QMessageBox.information(self, "Kairos", "Not connected to any peer.")
+            return
+        SendFileDialog(self.engine, sessions, self).exec()
+
+    def _on_collab_llm_task(self, sess, task):
+        resp = QMessageBox.question(
+            self, "Remote LLM Request",
+            f"{sess.remote_label or sess.remote_fp[:12]} asks your Kairos to answer:\n\n"
+            f"{html.escape((task.get('prompt') or '')[:800])}\n\n"
+            "Allow? This uses your own LLM provider.",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        try:
+            self.engine.collab.resolve_llm(task["task_id"], resp == QMessageBox.Yes)
+        except Exception:
+            pass
+
+    def _on_collab_video(self, data):
+        for w in self.collab_windows.values():
+            try:
+                w.sig_remote_video.emit(data)
+            except Exception:
+                pass
+
+    def open_federated_dialog(self):
+        collab = getattr(self.engine, "collab", None)
+        if not collab:
+            QMessageBox.information(self, "Kairos", "Collaboration is not enabled.")
+            return
+        sessions = collab.sessions()
+        if not sessions:
+            QMessageBox.information(self, "Kairos", "Not connected to any peer.")
+            return
+        FederatedDialog(self.engine, sessions, self).exec()
+
+    def open_discover_dialog(self):
+        if not getattr(self.engine, "collab", None):
+            QMessageBox.information(self, "Kairos", "Collaboration is not enabled.")
+            return
+        DiscoverDialog(self.engine, self).exec()
 
     def open_my_callsign_dialog(self):
         if not getattr(self.engine, "collab", None):
@@ -2341,6 +2844,9 @@ class KairosGUI(QMainWindow):
         collab_menu = menubar.addMenu("&Collaborate")
         collab_menu.addAction("My Call Sign\u2026", self.open_my_callsign_dialog)
         collab_menu.addAction("Connect to Peer\u2026", self.open_connect_dialog)
+        collab_menu.addAction("Send File to Peer\u2026", self.open_send_file_dialog)
+        collab_menu.addAction("Ask Peer's LLM\u2026", self.open_federated_dialog)
+        collab_menu.addAction("Discover Peers\u2026", self.open_discover_dialog)
 
         view_menu = menubar.addMenu("&View")
         view_menu.addAction("Self-Reflect", self.run_reflection)

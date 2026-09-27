@@ -25,7 +25,7 @@ TYPES = {
     "LLM_TASK": 50, "LLM_RESULT": 51, "LLM_ERROR": 52, "LLM_CANCEL": 53,
 }
 CODES = {v: k for k, v in TYPES.items()}
-BINARY_TYPES = {"FILE_CHUNK", "AUDIO_FRAME", "VIDEO_FRAME", "PROJECT_SYNC", "PROJECT_STATE_VEC"}
+BINARY_TYPES = {"AUDIO_FRAME", "VIDEO_FRAME", "PROJECT_SYNC", "PROJECT_STATE_VEC"}
 
 
 class _Strict(BaseModel):
@@ -67,20 +67,30 @@ class Typing(_Strict):
 
 
 class FileOffer(_Strict):
+    transfer_id: str = Field(max_length=64)
     name: str = Field(max_length=200)
     size: int = Field(ge=0, le=2 * 1024 * 1024 * 1024)
     sha256: str = Field(default="", max_length=64)
 
 
 class FileAccept(_Strict):
+    transfer_id: str = Field(max_length=64)
     accept: bool = True
 
 
+class FileChunk(_Strict):
+    transfer_id: str = Field(max_length=64)
+    seq: int = Field(ge=0)
+    data: str = Field(max_length=400000)  # base64 of <=256KB chunk
+
+
 class FileDone(_Strict):
+    transfer_id: str = Field(max_length=64)
     sha256: str = Field(default="", max_length=64)
 
 
 class FileCancel(_Strict):
+    transfer_id: str = Field(default="", max_length=64)
     reason: str = Field(default="", max_length=200)
 
 
@@ -115,8 +125,8 @@ CONTROL_MODELS = {
     "HELLO": Hello, "ACCEPT": Accept, "REJECT": Reject, "CAPS": Caps,
     "CHALLENGE": Challenge,
     "CHAT_MSG": ChatMsg, "CHAT_TYPING": Typing, "CHAT_READ": _Strict,
-    "FILE_OFFER": FileOffer, "FILE_ACCEPT": FileAccept, "FILE_DONE": FileDone,
-    "FILE_CANCEL": FileCancel, "MEDIA_CTRL": MediaCtrl,
+    "FILE_OFFER": FileOffer, "FILE_ACCEPT": FileAccept, "FILE_CHUNK": FileChunk,
+    "FILE_DONE": FileDone, "FILE_CANCEL": FileCancel, "MEDIA_CTRL": MediaCtrl,
     "LLM_TASK": LlmTask, "LLM_RESULT": LlmResult, "LLM_ERROR": LlmError,
     "PING": Ping, "PONG": Ping, "BYE": _Strict,
 }

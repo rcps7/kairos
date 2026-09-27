@@ -446,11 +446,19 @@ link — no central server required. Each install has an identity key; you share
   challenge–response client authentication, SSRF host policy (loopback/
   link-local/metadata blocked; private/LAN blocked unless enabled), strict
   message validation and frame-size caps.
-- **Transports:** Direct/LAN (binds your LAN or Tailscale IP, not 0.0.0.0) and
-  Tailscale. Over the internet, use Tailscale or port-forward; ngrok is planned.
+- **Transports:** Direct/LAN (binds your LAN or Tailscale IP, not 0.0.0.0),
+  Tailscale, and **ngrok** (TCP relay for hard NATs). Optional **LAN discovery**
+  (`Collaborate → Discover Peers…`) finds peers via mDNS.
 
-Encrypted **text chat** is available now; **files, shared CRDT project, federated
-LLM tasks, and voice/video** follow in upcoming releases.
+### What you can do together
+- **Encrypted chat** (Chat tab).
+- **File transfer** — consent-gated, SHA-256-verified, saved to a quarantine
+  folder (`Collaborate → Send File to Peer…`).
+- **Shared project** — CRDT-synced notes and tasks (Project tab), conflict-free.
+- **Federated LLM** — each side answers with its own model
+  (`Collaborate → Ask Peer's LLM…`), off by default with per-task approval.
+- **Voice & video** — 16 kHz PCM voice and JPEG video over the encrypted link
+  (Call tab; local opt-in, mute/camera toggles).
 
 ---
 

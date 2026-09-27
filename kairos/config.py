@@ -62,7 +62,9 @@ DEFAULT_CONFIG = {
         "allow_public_bind": False,
         "allow_private_targets": False,
         "allow_remote_llm": False,
+        "llm_require_approval": True,
         "max_sessions": 4,
+        "max_file_bytes": 536870912,
         "accept_timeout": 60,
         "idle_timeout": 300
     }

@@ -276,6 +276,13 @@ class KairosEngine:
             self.collab.on_connected = lambda s: self._collab_hook("on_collab_connected", s)
             self.collab.on_chat = lambda s, t: self._collab_hook("on_collab_chat", s, t)
             self.collab.on_event = lambda t: self._collab_hook("on_collab_event", t)
+            self.collab.on_file_offer = lambda s, o: self._collab_hook("on_collab_file_offer", s, o)
+            self.collab.on_file_done = lambda s, i: self._collab_hook("on_collab_file_done", s, i)
+            self.collab.on_file_progress = lambda s, i: self._collab_hook("on_collab_file_progress", s, i)
+            self.collab.on_llm_task = lambda s, t: self._collab_hook("on_collab_llm_task", s, t)
+            self.collab.on_audio = lambda s, d: self._collab_hook("on_collab_audio", s, d)
+            self.collab.on_video = lambda s, d: self._collab_hook("on_collab_video", s, d)
+            self.collab.on_media_ctrl = lambda s, m: self._collab_hook("on_collab_media_ctrl", s, m)
         except Exception:
             logger.exception("Failed to initialise collaboration.")
             self.collab = None
