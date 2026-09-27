@@ -51,6 +51,7 @@ Licensed under the **PolyForm Noncommercial License 1.0.0** (free for personal/n
 | Multi-provider LLM (Moonshot/Kimi, DeepSeek, OpenAI, any OpenAI-style API) | GUI / Telegram |
 | Agent Characters — selectable personas with per-character tool access | GUI / Telegram |
 | Long-term memory — LadybugDB knowledge graph with approval gate | GUI / Telegram |
+| Peer collaboration — P2P encrypted chat via call signs | GUI / Telegram |
 | Skill system — create, view, edit, run, delete skills | GUI / Telegram |
 | Self-improvement — records errors, reflects, stores lessons | GUI / Telegram |
 | Watchdog with kill switch + heartbeat monitoring | `kill.bat`, GUI, Telegram `/kill` |
@@ -426,6 +427,30 @@ graph small — minimising LLM cost.
 > Note: the Ladybug **full-text (FTS)** extension aborts the process on the
 > current Windows/Python 3.14 build, so keyword search falls back to a
 > Python-side scan; vector search and traversal are unaffected.
+
+---
+
+## Peer Collaboration
+
+Two Kairos instances can connect **peer-to-peer** and chat over an encrypted
+link — no central server required. Each install has an identity key; you share a
+**call sign** that encodes how to reach you plus the fingerprint of your key.
+
+- **Call sign:** `K1!<LABEL>!<transport>!<host>!<port>!<FP>!<CK>` (copy/paste or
+  QR). *Collaborate → My Call Sign…*.
+- **Connect:** *Collaborate → Connect to Peer…*, paste the peer's call sign.
+- **Approval:** the peer sees an incoming request with a fingerprint and a
+  6-digit **SAS** (verify it out-of-band, e.g. by voice) and must **Accept**
+  (GUI popup or Telegram inline buttons).
+- **Security:** TLS with certificate **fingerprint pinning** (mitM protection),
+  challenge–response client authentication, SSRF host policy (loopback/
+  link-local/metadata blocked; private/LAN blocked unless enabled), strict
+  message validation and frame-size caps.
+- **Transports:** Direct/LAN (binds your LAN or Tailscale IP, not 0.0.0.0) and
+  Tailscale. Over the internet, use Tailscale or port-forward; ngrok is planned.
+
+Encrypted **text chat** is available now; **files, shared CRDT project, federated
+LLM tasks, and voice/video** follow in upcoming releases.
 
 ---
 

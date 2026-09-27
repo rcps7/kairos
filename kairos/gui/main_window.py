@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                                QGridLayout, QComboBox, QTreeWidget, QTreeWidgetItem,
                                QScrollArea, QMenu)
 from PySide6.QtCore import Qt, Signal, QThread, QSize, QTimer
-from PySide6.QtGui import QAction, QFont, QColor, QPalette, QIcon, QTextCursor
+from PySide6.QtGui import QAction, QFont, QColor, QPalette, QIcon, QTextCursor, QPixmap
 
 from kairos.gui.voice_widgets import VoiceWorker, SpeakWorker, VoiceMeter, MoodIndicator
 from kairos.characters_presets import ALL_CAPABILITIES, CAPABILITY_LABELS
@@ -1446,6 +1446,238 @@ class GraphDialog(QDialog):
         self.refresh()
 
 
+class ConnectWorker(QThread):
+    ok = Signal(object)
+    failed = Signal(str)
+
+    def __init__(self, engine, call_sign):
+        super().__init__()
+        self.engine = engine
+        self.call_sign = call_sign
+
+    def run(self):
+        try:
+            sess = self.engine.collab.connect(self.call_sign)
+            self.ok.emit(sess)
+        except Exception as e:
+            self.failed.emit(str(e))
+
+
+class MyCallSignDialog(QDialog):
+    def __init__(self, engine, parent=None):
+        super().__init__(parent)
+        self.engine = engine
+        self.setWindowTitle("My Call Sign")
+        self.setStyleSheet(_dialog_style())
+        self.resize(580, 260)
+        layout = QVBoxLayout(self)
+        collab = getattr(engine, "collab", None)
+        if not collab:
+            layout.addWidget(QLabel("Collaboration is not enabled or failed to start."))
+            btn = QPushButton("Close"); btn.clicked.connect(self.accept)
+            layout.addWidget(btn)
+            return
+        cfg = engine.config.get("collaboration", {})
+        form = QFormLayout()
+        self.transport = QComboBox()
+        self.transport.addItems(["direct", "ts", "public"])
+        self.transport.setCurrentText(cfg.get("transport", "direct"))
+        self.port = QLineEdit(str(cfg.get("listen_port", 7777)))
+        form.addRow("Transport:", self.transport)
+        form.addRow("Port:", self.port)
+        layout.addLayout(form)
+        apply_btn = QPushButton("Start / Refresh Listener")
+        apply_btn.clicked.connect(self._apply)
+        layout.addWidget(apply_btn)
+        layout.addWidget(QLabel("Share this call sign with your peer:"))
+        self.cs = QLineEdit(self._callsign())
+        self.cs.setReadOnly(True)
+        layout.addWidget(self.cs)
+        row = QHBoxLayout()
+        copy_btn = QPushButton("Copy")
+        copy_btn.clicked.connect(lambda: QApplication.clipboard().setText(self.cs.text()))
+        qr_btn = QPushButton("Show QR")
+        qr_btn.clicked.connect(self._show_qr)
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.accept)
+        row.addWidget(copy_btn); row.addWidget(qr_btn); row.addStretch(); row.addWidget(close_btn)
+        layout.addLayout(row)
+
+    def _callsign(self):
+        try:
+            return self.engine.collab.my_callsign()
+        except Exception as e:
+            return f"(error: {e})"
+
+    def _apply(self):
+        try:
+            self.engine.collab.start_listener(self.transport.currentText(),
+                                              int(self.port.text() or 7777))
+            from kairos.config import load_config, save_config
+            c = load_config()
+            col = c.setdefault("collaboration", {})
+            col["transport"] = self.transport.currentText()
+            col["listen_port"] = int(self.port.text() or 7777)
+            save_config(c)
+            self.engine.config = load_config()
+            self.cs.setText(self._callsign())
+        except Exception as e:
+            QMessageBox.warning(self, "Kairos", f"Could not start listener:\n{e}")
+
+    def _show_qr(self):
+        from kairos.collab import callsign as csmod
+        png = csmod.qr_png(self.cs.text())
+        if not png:
+            QMessageBox.information(self, "Kairos", "QR code not available.")
+            return
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Call Sign QR")
+        v = QVBoxLayout(dlg)
+        lbl = QLabel()
+        pix = QPixmap()
+        pix.loadFromData(png)
+        lbl.setPixmap(pix)
+        v.addWidget(lbl)
+        dlg.exec()
+
+
+class ConnectDialog(QDialog):
+    def __init__(self, engine, parent=None):
+        super().__init__(parent)
+        self.engine = engine
+        self.setWindowTitle("Connect to a Peer")
+        self.setStyleSheet(_dialog_style())
+        self.resize(600, 180)
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("Paste your peer's call sign:"))
+        self.edit = QLineEdit()
+        self.edit.setPlaceholderText("K1!LABEL!direct!host!port!FP32!CK")
+        layout.addWidget(self.edit)
+        self.status = QLabel("")
+        self.status.setStyleSheet(f"color: {TEXT_GREY};")
+        layout.addWidget(self.status)
+        row = QHBoxLayout()
+        self.connect_btn = QPushButton("Connect")
+        self.connect_btn.clicked.connect(self._connect)
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.accept)
+        row.addWidget(self.connect_btn); row.addStretch(); row.addWidget(close_btn)
+        layout.addLayout(row)
+        self._worker = None
+
+    def _connect(self):
+        cs = self.edit.text().strip()
+        if not cs:
+            return
+        if not getattr(self.engine, "collab", None):
+            QMessageBox.warning(self, "Kairos", "Collaboration is not enabled.")
+            return
+        self.connect_btn.setEnabled(False)
+        self.status.setText("Connecting (waiting for peer approval) ...")
+        self._worker = ConnectWorker(self.engine, cs)
+        self._worker.ok.connect(self._ok)
+        self._worker.failed.connect(self._fail)
+        self._worker.start()
+
+    def _ok(self, sess):
+        self.connect_btn.setEnabled(True)
+        self.status.setText("Connected.")
+        QMessageBox.information(self, "Kairos",
+                                f"Connected to {sess.remote_label or sess.remote_fp[:12]}.")
+        self.accept()
+
+    def _fail(self, msg):
+        self.connect_btn.setEnabled(True)
+        self.status.setText(f"Failed: {msg}")
+        QMessageBox.warning(self, "Kairos", msg)
+
+
+class IncomingRequestDialog(QDialog):
+    def __init__(self, req, parent=None):
+        super().__init__(parent)
+        self.req = req
+        self.accepted = False
+        self.setWindowTitle("Incoming Collaboration Request")
+        self.setStyleSheet(_dialog_style())
+        self.resize(520, 260)
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel(f"<b>{html.escape(req.label or 'Unknown peer')}</b> wants to connect."))
+        info = QLabel(
+            f"Fingerprint: {req.remote_fp[:32]}...\n"
+            f"Safety code (SAS): <b>{req.sas}</b>"
+        )
+        info.setStyleSheet(f"color: {TEXT};")
+        layout.addWidget(info)
+        note = QLabel("Verify this SAS with your peer over another channel "
+                      "(phone/voice) before accepting.")
+        note.setWordWrap(True)
+        note.setStyleSheet(f"color: {TEXT_GREY};")
+        layout.addWidget(note)
+        row = QHBoxLayout()
+        accept_btn = QPushButton("Accept")
+        accept_btn.setStyleSheet(f"background-color: {GREEN_DIM}; color: {BG_DARK}; font-weight: bold;")
+        accept_btn.clicked.connect(self._accept)
+        reject_btn = QPushButton("Reject")
+        reject_btn.setStyleSheet(f"background-color: {RED}; color: white;")
+        reject_btn.clicked.connect(self._reject)
+        row.addWidget(accept_btn); row.addWidget(reject_btn)
+        layout.addLayout(row)
+
+    def _accept(self):
+        self.accepted = True
+        self.accept()
+
+    def _reject(self):
+        self.accepted = False
+        self.reject()
+
+
+class CollaborationWindow(QDialog):
+    def __init__(self, engine, session, parent=None):
+        super().__init__(parent)
+        self.engine = engine
+        self.session = session
+        self.setWindowTitle(f"Collaboration - {session.remote_label or session.remote_fp[:12]}")
+        self.setStyleSheet(_dialog_style())
+        self.resize(720, 560)
+        layout = QVBoxLayout(self)
+        header = QLabel(f"Connected to <b>{html.escape(session.remote_label or session.remote_fp[:12])}</b>"
+                        f"  ·  FP {session.remote_fp[:16]}…")
+        header.setStyleSheet(f"color: {GREEN};")
+        layout.addWidget(header)
+        self.view = QTextBrowser()
+        self.view.setStyleSheet(f"background-color: {BG_INPUT}; color: {TEXT};")
+        layout.addWidget(self.view, 1)
+        row = QHBoxLayout()
+        self.input = QLineEdit()
+        self.input.setPlaceholderText("Type a message...")
+        self.input.returnPressed.connect(self._send)
+        send_btn = QPushButton("Send")
+        send_btn.setStyleSheet(f"background-color: {GREEN_DIM}; color: {BG_DARK}; font-weight: bold;")
+        send_btn.clicked.connect(self._send)
+        row.addWidget(self.input, 1); row.addWidget(send_btn)
+        layout.addLayout(row)
+
+    def append_peer(self, text):
+        self._append("peer", text)
+
+    def _send(self):
+        text = self.input.text().strip()
+        if not text:
+            return
+        try:
+            self.engine.collab.send_chat(self.session.remote_fp, text)
+            self._append("me", text)
+        except Exception as e:
+            self._append("system", f"send failed: {e}")
+        self.input.clear()
+
+    def _append(self, who, text):
+        color = {"me": "#58a6ff", "peer": GREEN, "system": TEXT_GREY}.get(who, TEXT)
+        label = {"me": "You", "peer": "Peer", "system": "system"}.get(who, who)
+        self.view.append(f'<span style="color:{color}"><b>{label}:</b> {html.escape(text)}</span>')
+
+
 class PredictWorker(QThread):
     finished = Signal(dict)
     error = Signal(str)
@@ -1891,16 +2123,72 @@ class OutputDialog(QDialog):
 
 
 class KairosGUI(QMainWindow):
+    sig_collab_incoming = Signal(object)
+    sig_collab_connected = Signal(object)
+    sig_collab_chat = Signal(object, str)
+    sig_collab_event = Signal(str)
+
     def __init__(self, engine):
         super().__init__()
         self.engine = engine
         self._deep_timer = None
         self._thinking_elapsed = 0
+        self.collab_windows = {}
+        self.sig_collab_incoming.connect(self._on_collab_incoming)
+        self.sig_collab_connected.connect(self._on_collab_connected)
+        self.sig_collab_chat.connect(self._on_collab_chat)
+        self.sig_collab_event.connect(lambda t: self.statusBar().showMessage(t, 5000))
         self.setWindowTitle("KAIROS  -  Self-Evolving AI Agent")
         self.resize(1280, 800)
         self.setMinimumSize(960, 600)
         self.apply_stylesheet()
         self.init_ui()
+        self._wire_collaboration()
+
+    def _wire_collaboration(self):
+        collab = getattr(self.engine, "collab", None)
+        if not collab:
+            return
+        self.engine.on_collab_incoming = lambda req: self.sig_collab_incoming.emit(req)
+        self.engine.on_collab_connected = lambda s: self.sig_collab_connected.emit(s)
+        self.engine.on_collab_chat = lambda s, t: self.sig_collab_chat.emit(s, t)
+        self.engine.on_collab_event = lambda t: self.sig_collab_event.emit(t)
+
+    def _on_collab_incoming(self, req):
+        dlg = IncomingRequestDialog(req, self)
+        dlg.exec()
+        self.engine.collab.resolve_incoming(req.id, dlg.accepted)
+
+    def _on_collab_connected(self, sess):
+        self._append_bubble(
+            "Collaboration",
+            f"Connected to {sess.remote_label or sess.remote_fp[:12]} "
+            f"(FP {sess.remote_fp[:16]}…).",
+            "system", GREEN,
+        )
+        win = CollaborationWindow(self.engine, sess, self)
+        self.collab_windows[sess.remote_fp] = win
+        win.show()
+
+    def _on_collab_chat(self, sess, text):
+        win = self.collab_windows.get(sess.remote_fp)
+        if not win:
+            win = CollaborationWindow(self.engine, sess, self)
+            self.collab_windows[sess.remote_fp] = win
+            win.show()
+        win.append_peer(text)
+
+    def open_my_callsign_dialog(self):
+        if not getattr(self.engine, "collab", None):
+            QMessageBox.information(self, "Kairos", "Collaboration is not enabled.")
+            return
+        MyCallSignDialog(self.engine, self).exec()
+
+    def open_connect_dialog(self):
+        if not getattr(self.engine, "collab", None):
+            QMessageBox.information(self, "Kairos", "Collaboration is not enabled.")
+            return
+        ConnectDialog(self.engine, self).exec()
 
     # ------------------------------------------------------------------
     # Stylesheet
@@ -2049,6 +2337,10 @@ class KairosGUI(QMainWindow):
 
         tools_menu = menubar.addMenu("&Tools")
         tools_menu.addAction("Predictive Engine", self.open_predict_dialog)
+
+        collab_menu = menubar.addMenu("&Collaborate")
+        collab_menu.addAction("My Call Sign\u2026", self.open_my_callsign_dialog)
+        collab_menu.addAction("Connect to Peer\u2026", self.open_connect_dialog)
 
         view_menu = menubar.addMenu("&View")
         view_menu.addAction("Self-Reflect", self.run_reflection)

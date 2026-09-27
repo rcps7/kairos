@@ -245,6 +245,27 @@ class TelegramBot:
             except Exception as e:
                 logger.error("Failed to send graph approval: %s", e)
 
+    async def prompt_collab_request(self, req):
+        """Notify known chats of an incoming collaboration request."""
+        if not self._chat_ids or not self.app:
+            return
+        keyboard = [[
+            InlineKeyboardButton("Accept", callback_data=f"caccept_{req.id}"),
+            InlineKeyboardButton("Reject", callback_data=f"creject_{req.id}"),
+        ]]
+        text = (f"Incoming collaboration request from "
+                f"{req.label or req.remote_fp[:12]}\n"
+                f"Fingerprint: {req.remote_fp[:32]}...\n"
+                f"Safety code (SAS): {req.sas}\n"
+                "Verify the SAS with your peer before accepting.")
+        for chat_id in list(self._chat_ids):
+            try:
+                await self.app.bot.send_message(
+                    chat_id=chat_id, text=text,
+                    reply_markup=InlineKeyboardMarkup(keyboard))
+            except Exception as e:
+                logger.error("Failed to send collab prompt: %s", e)
+
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         self._register_chat(update)
         await update.message.reply_text(
@@ -630,13 +651,19 @@ class TelegramBot:
         if data.startswith("gapprove_"):
             pid = data[len("gapprove_"):]
             ok = await asyncio.to_thread(self.engine.approve_pending_graph, pid)
-            await query.edit_message_text(text="Approved and stored in the knowledge graph." if ok
-                                          else "Approval failed.")
+            await query.edit_message_text(
+                text="Approved and stored in the knowledge graph." if ok else "Approval failed.")
             return
         if data.startswith("greject_"):
             pid = data[len("greject_"):]
             await asyncio.to_thread(self.engine.reject_pending_graph, pid)
             await query.edit_message_text(text="Rejected.")
+            return
+        if data.startswith("caccept_") or data.startswith("creject_"):
+            accept = data.startswith("caccept_")
+            req_id = data.split("_", 1)[1]
+            await asyncio.to_thread(self.engine.resolve_collab, req_id, accept)
+            await query.edit_message_text(text="Accepted." if accept else "Rejected.")
             return
 
         if data in ("dl_mp3", "dl_mp4"):

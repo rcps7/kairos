@@ -81,6 +81,8 @@ class KairosEngine:
         self._init_graph_memory()
         if self.graph:
             threading.Thread(target=self.backfill_graph_memory, daemon=True).start()
+        self.collab = None
+        self._init_collaboration()
         self._loop = None
         self._thread = None
         self._retention_thread = None
@@ -262,6 +264,42 @@ class KairosEngine:
         except Exception:
             logger.exception("Failed to initialise graph memory.")
             self.graph = None
+
+    def _init_collaboration(self):
+        cfg = self.config.get("collaboration", {}) or {}
+        if not cfg.get("enabled", True):
+            return
+        try:
+            from kairos.collab.manager import CollaborationManager
+            self.collab = CollaborationManager(self, config=cfg)
+            self.collab.on_incoming = self._collab_incoming
+            self.collab.on_connected = lambda s: self._collab_hook("on_collab_connected", s)
+            self.collab.on_chat = lambda s, t: self._collab_hook("on_collab_chat", s, t)
+            self.collab.on_event = lambda t: self._collab_hook("on_collab_event", t)
+        except Exception:
+            logger.exception("Failed to initialise collaboration.")
+            self.collab = None
+
+    def _collab_hook(self, name, *args):
+        cb = getattr(self, name, None)
+        if cb:
+            try:
+                cb(*args)
+            except Exception:
+                pass
+
+    def _collab_incoming(self, req):
+        self._collab_hook("on_collab_incoming", req)
+        try:
+            if self.telegram and self.telegram.running and self._loop:
+                asyncio.run_coroutine_threadsafe(
+                    self.telegram.prompt_collab_request(req), self._loop)
+        except Exception:
+            pass
+
+    def resolve_collab(self, req_id: str, accept: bool):
+        if self.collab:
+            self.collab.resolve_incoming(req_id, accept)
 
     def graph_context(self, query: str) -> str:
         cfg = self._graph_cfg()
@@ -948,6 +986,11 @@ class KairosEngine:
         try:
             if self.graph:
                 self.graph.close()
+        except Exception:
+            pass
+        try:
+            if self.collab:
+                self.collab.close()
         except Exception:
             pass
         try:

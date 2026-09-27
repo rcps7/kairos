@@ -53,6 +53,18 @@ DEFAULT_CONFIG = {
         "max_nodes": 12,
         "max_memories": 6,
         "dedup_distance": 0.15
+    },
+    "collaboration": {
+        "enabled": True,
+        "display_name": "",
+        "transport": "direct",
+        "listen_port": 7777,
+        "allow_public_bind": False,
+        "allow_private_targets": False,
+        "allow_remote_llm": False,
+        "max_sessions": 4,
+        "accept_timeout": 60,
+        "idle_timeout": 300
     }
 }
 
