@@ -121,7 +121,14 @@ class SpeakWorker(QThread):
         self.text = text
 
     def run(self):
+        _com = False
         try:
+            try:
+                import pythoncom
+                pythoncom.CoInitialize()
+                _com = True
+            except Exception:
+                pass
             with _tts_lock:
                 engine = _get_tts_engine()
                 if engine is None:
@@ -131,7 +138,14 @@ class SpeakWorker(QThread):
                 engine.runAndWait()
         except Exception:
             pass
-        self.finished_speaking.emit()
+        finally:
+            if _com:
+                try:
+                    import pythoncom
+                    pythoncom.CoUninitialize()
+                except Exception:
+                    pass
+            self.finished_speaking.emit()
 
 
 # ---------------------------------------------------------------------------

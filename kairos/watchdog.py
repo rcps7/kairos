@@ -27,6 +27,7 @@ CONFIG_DIR = Path.home() / ".kairos"
 HEARTBEAT_FILE = CONFIG_DIR / "heartbeat"
 PID_FILE = CONFIG_DIR / "kairos.pid"
 KILLSWITCH_FILE = CONFIG_DIR / "KILLSWITCH"
+TOKEN_FILE = CONFIG_DIR / "watchdog.token"
 
 DEFAULT_HEARTBEAT_TIMEOUT = 60  # seconds
 DEFAULT_KILL_PORT = 50055
@@ -41,10 +42,38 @@ def read_pid():
     return None
 
 
+def read_token():
+    try:
+        if TOKEN_FILE.exists():
+            return TOKEN_FILE.read_text(encoding="utf-8").strip()
+    except OSError:
+        pass
+    return ""
+
+
+def _is_python_process(pid) -> bool:
+    """Best-effort: confirm the PID is a Python process before killing it."""
+    if sys.platform != "win32":
+        return True
+    try:
+        out = subprocess.run(
+            ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+            capture_output=True, text=True, timeout=15,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        ).stdout.lower()
+        return "python" in out
+    except Exception:
+        return True  # if we cannot check, don't block the kill
+
+
 def kill_process(pid):
     """Terminate the process with the given PID. Returns True on success."""
     if pid is None:
         print("[watchdog] no kairos.pid found.", file=sys.stderr)
+        return False
+    if not _is_python_process(pid):
+        print(f"[watchdog] PID {pid} is not a Python process; refusing to kill "
+              "(possible PID reuse).", file=sys.stderr)
         return False
     if sys.platform == "win32":
         try:
@@ -72,11 +101,12 @@ def kill_process(pid):
 class KillSocketServer(threading.Thread):
     """Listens on localhost and triggers the kill switch on a KILL command."""
 
-    def __init__(self, port, on_kill, host="127.0.0.1"):
+    def __init__(self, port, on_kill, host="127.0.0.1", token_provider=None):
         super().__init__(daemon=True)
         self.port = port
         self.host = host
         self.on_kill = on_kill
+        self.token_provider = token_provider or read_token
         self._stop = threading.Event()
 
     def run(self):
@@ -98,11 +128,25 @@ class KillSocketServer(threading.Thread):
                 break
             with conn:
                 try:
-                    data = conn.recv(64).decode("utf-8", "ignore").strip().upper()
+                    data = conn.recv(128).decode("utf-8", "ignore").strip()
                 except OSError:
                     continue
-                if data in ("KILL", "SHUTDOWN", "STOP"):
-                    print(f"[watchdog] KILL command received from {addr}")
+                parts = data.split()
+                verb = parts[0].upper() if parts else ""
+                supplied = parts[1] if len(parts) > 1 else ""
+                if verb in ("KILL", "SHUTDOWN", "STOP"):
+                    try:
+                        token = self.token_provider() if callable(self.token_provider) else ""
+                    except Exception:
+                        token = ""
+                    # If a token is configured it MUST match.
+                    if token and supplied != token:
+                        print(f"[watchdog] rejected unauthenticated KILL from {addr}")
+                        continue
+                    if not token:
+                        print("[watchdog] WARNING: no watchdog token configured; "
+                              "accepting unauthenticated KILL.")
+                    print(f"[watchdog] authenticated KILL received from {addr}")
                     self.on_kill()
                     break
         try:
@@ -126,7 +170,7 @@ def monitor(timeout=DEFAULT_HEARTBEAT_TIMEOUT, port=DEFAULT_KILL_PORT):
     print(f"[watchdog] kill socket      : 127.0.0.1:{port} (send 'KILL')")
     print(f"[watchdog] heartbeat timeout: {timeout}s")
 
-    kill_srv = KillSocketServer(port, do_kill)
+    kill_srv = KillSocketServer(port, do_kill, token_provider=read_token)
     kill_srv.start()
 
     try:

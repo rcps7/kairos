@@ -5,6 +5,7 @@ import traceback
 from pathlib import Path
 
 from .base import Skill
+from kairos import safety
 
 logger = logging.getLogger(__name__)
 
@@ -67,37 +68,52 @@ class SkillManager:
 
     def read_source(self, name: str) -> str:
         """Return the source code of a skill by its name (file stem)."""
-        py_file = self.skills_dir / f"{name}.py"
+        try:
+            py_file = safety.confine_path(self.skills_dir, name)
+        except ValueError:
+            return ""
         if py_file.exists():
             return py_file.read_text(encoding="utf-8")
         return ""
 
     def source_path(self, name: str) -> Path:
-        return self.skills_dir / f"{name}.py"
+        return safety.confine_path(self.skills_dir, name)
 
     def save_source(self, name: str, code: str) -> Path:
         """Write a skill's source code to disk and reload it."""
-        py_file = self.skills_dir / f"{name}.py"
+        py_file = safety.confine_path(self.skills_dir, name)
         py_file.write_text(code, encoding="utf-8")
         self.load_file(py_file)
         return py_file
 
     def delete_skill(self, name: str) -> str:
         """Delete a skill's source file and unload it from memory."""
-        py_file = self.skills_dir / f"{name}.py"
+        py_file = safety.confine_path(self.skills_dir, name)
         if py_file.exists():
             py_file.unlink()
         self.skills.pop(name, None)
         return str(py_file)
 
-    def run_skill(self, name: str, engine, **kwargs):
+    def run_skill(self, name: str, engine, sandbox: bool = True, **kwargs):
         skill = self.skills.get(name)
         if not skill:
             raise RuntimeError(f"Skill '{name}' not found.")
+        # UI skills must run in-process (on the main thread) so they can open
+        # Qt dialogs; they cannot be sandboxed.
+        if sandbox and not getattr(skill, "uses_ui", False):
+            try:
+                from .runner import run_skill_sandboxed, SandboxUnavailable
+            except ImportError:
+                run_skill_sandboxed = None
+            if run_skill_sandboxed is not None:
+                try:
+                    return run_skill_sandboxed(self.source_path(name), engine, kwargs)
+                except SandboxUnavailable as e:
+                    logger.warning("Skill sandbox unavailable (%s); running in-process.", e)
         return skill.run(engine, **kwargs)
 
     def create_skill(self, name: str, description: str, code: str) -> Path:
-        py_file = self.skills_dir / f"{name}.py"
+        py_file = safety.confine_path(self.skills_dir, name)
         py_file.write_text(code, encoding="utf-8")
         self.load_file(py_file)
         return py_file

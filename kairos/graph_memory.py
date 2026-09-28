@@ -19,6 +19,7 @@ import importlib.util
 import logging
 import re
 import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -71,6 +72,8 @@ class GraphMemory:
         self.available = False
         self.vector_available = False
         self.embeddings_available = embed_fn is not None
+        self._index_dirty = False
+        self._last_index_rebuild = 0.0
         self.dedup_distance = dedup_distance
         self._embed_fn = embed_fn
         self._db_path = str(db_path)
@@ -298,6 +301,7 @@ class GraphMemory:
                 except Exception:
                     pass
 
+        self._index_dirty = True
         return {"ok": True, "entities": resolved, "memory_id": (memory or {}).get("id")}
 
     # ------------------------------------------------------------------
@@ -309,6 +313,16 @@ class GraphMemory:
     async def aretrieve(self, query: str, k_nodes: int = 12, k_memories: int = 6, hops: int = 2):
         if not self.available or not query:
             return {"context": "", "entities": [], "memories": []}
+        # Refresh the HNSW index if embeddings changed recently (debounced), so
+        # updated nodes are not stale in vector search.
+        if (self.semantic_ready and self._index_dirty
+                and (time.time() - self._last_index_rebuild) > 30):
+            try:
+                await self.arebuild_vector_indexes()
+                self._index_dirty = False
+                self._last_index_rebuild = time.time()
+            except Exception:
+                logger.debug("Vector index rebuild failed", exc_info=True)
         qv = self._embed_one(query)
         entities = []
         memories = []

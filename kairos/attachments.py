@@ -38,6 +38,16 @@ def collect_paths(paths):
     return out
 
 
+def _read_text_bounded(path, max_chars: int) -> str:
+    """Read at most ~max_chars*4 bytes so huge files can't exhaust memory."""
+    try:
+        with open(path, "rb") as f:
+            raw = f.read(max_chars * 4 + 1)
+        return raw.decode("utf-8", errors="ignore")[:max_chars]
+    except Exception as e:
+        return f"(Error reading {Path(path).name}: {e})"
+
+
 def extract_text(path, max_chars: int = 20000) -> str:
     """Extract text from a single file (best effort)."""
     path = Path(path)
@@ -51,10 +61,7 @@ def extract_text(path, max_chars: int = 20000) -> str:
             return _extract_sheet(path, max_chars)
         if ext in IMAGE_EXTS:
             return ""
-        if ext in TEXT_EXTS or ext == "":
-            return path.read_text(encoding="utf-8", errors="ignore")[:max_chars]
-        # Unknown: try as text
-        return path.read_text(encoding="utf-8", errors="ignore")[:max_chars]
+        return _read_text_bounded(path, max_chars)
     except Exception as e:
         logger.exception("Failed to read %s", path)
         return f"(Error reading {path.name}: {e})"

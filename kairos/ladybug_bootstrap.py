@@ -76,12 +76,8 @@ def _download(url: str, dest: Path):
 
 def _extract(archive: Path, dest: Path):
     dest.mkdir(parents=True, exist_ok=True)
-    if archive.suffix == ".zip":
-        with zipfile.ZipFile(archive) as z:
-            z.extractall(dest)
-    else:
-        with tarfile.open(archive) as t:
-            t.extractall(dest)
+    from kairos import safety
+    safety.safe_extract(archive, dest)
 
 
 def _find(root: Path, names):

@@ -46,3 +46,18 @@ desktop.ini
 # ---- IDE ----
 .idea/
 .vscode/
+
+# ---- Local scratch / stray artifacts ----
+Doc2.docx
+*.docx
+KAIROS*.jpg
+KAIROS*.png
+pentest_*.txt
+write_script.py
+gen_pen_fi.py
+README_*.txt
+apply_update.bat
+
+# ---- Local extracted/installed copies ----
+kairos-master/
+KAIROS-agent-bundle.zip

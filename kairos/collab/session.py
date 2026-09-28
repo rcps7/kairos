@@ -47,6 +47,14 @@ def peer_fp(writer) -> str:
     der = ssl_obj.getpeercert(binary_form=True)
     if not der:
         raise SecurityError("No peer certificate presented.")
+    try:
+        from datetime import datetime, timezone
+        if identity.cert_not_after_utc(der) < datetime.now(timezone.utc):
+            raise SecurityError("Peer certificate has expired.")
+    except SecurityError:
+        raise
+    except Exception:
+        logger.debug("Could not check peer certificate validity", exc_info=True)
     return identity.spki_fp_from_cert_der(der)
 
 

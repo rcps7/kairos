@@ -1,7 +1,15 @@
 import copy
 import json
+import logging
+import threading
 from pathlib import Path
 import keyring
+
+from kairos import safety
+
+logger = logging.getLogger(__name__)
+
+_config_lock = threading.Lock()
 
 CONFIG_DIR = Path.home() / ".kairos"
 CONFIG_FILE = CONFIG_DIR / "config.json"
@@ -9,6 +17,9 @@ CONFIG_FILE = CONFIG_DIR / "config.json"
 DEFAULT_CONFIG = {
     "storage_root": str(Path.home() / "KairosData"),
     "telegram_token": None,
+    "telegram": {
+        "allowed_user_ids": []
+    },
     "active_llm": "moonshot",
     "llm_providers": {
         "moonshot": {
@@ -93,50 +104,86 @@ def _keyring_set(key: str, value: str):
         return False
 
 
+def _deep_merge(defaults: dict, cfg: dict) -> dict:
+    for k, v in defaults.items():
+        if k not in cfg:
+            cfg[k] = copy.deepcopy(v)
+        elif isinstance(v, dict) and isinstance(cfg.get(k), dict):
+            _deep_merge(v, cfg[k])
+    return cfg
+
+
+def _write_raw(cfg: dict):
+    safety.atomic_write_text(CONFIG_FILE, json.dumps(cfg, indent=4))
+    safety.restrict_file(CONFIG_FILE)
+
+
 def load_config() -> dict:
     _ensure_config_dir()
     with CONFIG_FILE.open("r", encoding="utf-8") as f:
         cfg = json.load(f)
 
-    # Backfill missing top-level keys
-    for key, value in DEFAULT_CONFIG.items():
-        cfg.setdefault(key, value)
+    # Recursively backfill missing defaults (nested dicts included).
+    _deep_merge(DEFAULT_CONFIG, cfg)
 
     if not cfg.get("telegram_token"):
         cfg["telegram_token"] = _keyring_get("telegram_token")
 
-    # Load LLM provider API keys from keyring
     for pid, p in cfg.get("llm_providers", {}).items():
         if not p.get("api_key"):
             p["api_key"] = _keyring_get(f"llm_api_key_{pid}")
 
-    # Load MiroFish Zep key from keyring
     mirofish = cfg.setdefault("mirofish", {})
     if not mirofish.get("zep_api_key"):
         mirofish["zep_api_key"] = _keyring_get("mirofish_zep_api_key")
+
+    # Email password: load from keyring; migrate any plaintext copy out of the file.
+    email = cfg.setdefault("email", {})
+    addr = (email.get("email") or "").strip()
+    if addr:
+        if not email.get("password"):
+            email["password"] = _keyring_get(f"email_password_{addr}")
+        pwd = email.get("password")
+        if pwd:
+            if _keyring_set(f"email_password_{addr}", pwd):
+                email["password"] = None
+                try:
+                    _write_raw(cfg)
+                except Exception:
+                    pass
 
     return cfg
 
 
 def save_config(cfg: dict):
     _ensure_config_dir()
-    # Work on a copy so the caller's dict keeps its secrets in memory.
-    cfg = copy.deepcopy(cfg)
-    token = cfg.get("telegram_token")
-    if token:
-        if _keyring_set("telegram_token", token):
-            cfg["telegram_token"] = None
+    with _config_lock:
+        cfg = copy.deepcopy(cfg)
 
-    providers = cfg.get("llm_providers", {})
-    for pid, p in providers.items():
-        if p.get("api_key"):
-            if _keyring_set(f"llm_api_key_{pid}", p["api_key"]):
-                p["api_key"] = None
+        # Secrets are NEVER written to disk: store in keyring, and null them in
+        # the file even if the keyring is unavailable.
+        token = cfg.get("telegram_token")
+        cfg["telegram_token"] = None
+        if token and not _keyring_set("telegram_token", token):
+            logger.warning("Keyring unavailable; Telegram token not written to disk.")
 
-    mirofish = cfg.get("mirofish", {})
-    if mirofish.get("zep_api_key"):
-        if _keyring_set("mirofish_zep_api_key", mirofish["zep_api_key"]):
-            mirofish["zep_api_key"] = None
+        for pid, p in cfg.get("llm_providers", {}).items():
+            key = p.get("api_key")
+            p["api_key"] = None
+            if key and not _keyring_set(f"llm_api_key_{pid}", key):
+                logger.warning("Keyring unavailable; API key for '%s' not written to disk.", pid)
 
-    with CONFIG_FILE.open("w", encoding="utf-8") as f:
-        json.dump(cfg, f, indent=4)
+        mirofish = cfg.setdefault("mirofish", {})
+        zkey = mirofish.get("zep_api_key")
+        mirofish["zep_api_key"] = None
+        if zkey and not _keyring_set("mirofish_zep_api_key", zkey):
+            logger.warning("Keyring unavailable; MiroFish key not written to disk.")
+
+        email = cfg.setdefault("email", {})
+        epwd = email.get("password")
+        email["password"] = None
+        addr = (email.get("email") or "").strip()
+        if epwd and addr and not _keyring_set(f"email_password_{addr}", epwd):
+            logger.warning("Keyring unavailable; email password not written to disk.")
+
+        _write_raw(cfg)

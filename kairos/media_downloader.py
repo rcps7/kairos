@@ -27,12 +27,16 @@ class MediaDownloader:
             "noplaylist": True,
             "quiet": True,
             "no_warnings": True,
+            "restrictfilenames": True,
         }
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=True)
             title = info.get("title", "video")
             media_id = uuid.uuid4().hex
-            file_path = str(media_dir / f"{title}.mp4")
+            try:
+                file_path = ydl.prepare_filename(info)
+            except Exception:
+                file_path = str(media_dir / f"{title}.mp4")
             self.media_store.add_media(media_id, file_path, title, "video")
             return {"id": media_id, "title": title, "path": file_path, "type": "video"}
 
@@ -52,11 +56,16 @@ class MediaDownloader:
             "noplaylist": True,
             "quiet": True,
             "no_warnings": True,
+            "restrictfilenames": True,
         }
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=True)
             title = info.get("title", "audio")
             media_id = uuid.uuid4().hex
-            file_path = str(media_dir / f"{title}.mp3")
+            try:
+                from pathlib import Path as _Path
+                file_path = str(_Path(ydl.prepare_filename(info)).with_suffix(".mp3"))
+            except Exception:
+                file_path = str(media_dir / f"{title}.mp3")
             self.media_store.add_media(media_id, file_path, title, "audio")
             return {"id": media_id, "title": title, "path": file_path, "type": "audio"}

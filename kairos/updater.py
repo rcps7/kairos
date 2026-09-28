@@ -17,6 +17,8 @@ from typing import Optional
 
 import httpx
 
+from kairos import safety
+
 logger = logging.getLogger(__name__)
 
 GITHUB_REPO = "rcps7/kairos"
@@ -26,6 +28,7 @@ HEADERS = {"User-Agent": "kairos-updater", "Accept": "application/vnd.github+jso
 # Program files copied during an update (never user data).
 PROGRAM_FILES = [
     "requirements.txt",
+    "requirements.lock",
     "run.bat",
     "watchdog.bat",
     "kill.bat",
@@ -33,6 +36,7 @@ PROGRAM_FILES = [
     "install.py",
     "run.sh",
     "README.md",
+    "SECURITY.md",
     "LICENSE",
     "CONTRIBUTING.md",
     "setup.cfg",
@@ -79,9 +83,15 @@ def check_for_update(timeout: float = 10.0) -> dict:
     local = local_version()
 
     asset_url = None
+    asset_digest = None
+    asset_name = None
     for a in data.get("assets", []):
         if str(a.get("name", "")).lower().endswith(".zip"):
             asset_url = a.get("browser_download_url")
+            asset_name = a.get("name")
+            digest = a.get("digest") or ""
+            if digest.startswith("sha256:"):
+                asset_digest = digest.split(":", 1)[1].strip().lower()
             break
     if not asset_url:
         asset_url = data.get("zipball_url")
@@ -94,12 +104,14 @@ def check_for_update(timeout: float = 10.0) -> dict:
         "published_at": data.get("published_at", ""),
         "html_url": data.get("html_url", ""),
         "download_url": asset_url,
+        "asset_name": asset_name,
+        "asset_digest": asset_digest,
         "error": None,
     }
 
 
-def download_and_extract(url: str, dest: str) -> Path:
-    """Download a ZIP and extract it. Returns the extraction folder."""
+def download_and_extract(url: str, dest: str, expected_sha256: str = None) -> Path:
+    """Download a ZIP, verify its sha256 (if provided), and safely extract it."""
     dest_path = Path(dest)
     dest_path.mkdir(parents=True, exist_ok=True)
     zip_path = dest_path / "update.zip"
@@ -109,8 +121,15 @@ def download_and_extract(url: str, dest: str) -> Path:
         with zip_path.open("wb") as f:
             for chunk in r.iter_bytes():
                 f.write(chunk)
-    with zipfile.ZipFile(zip_path) as z:
-        z.extractall(dest_path)
+
+    if expected_sha256:
+        actual = safety.sha256_file(zip_path)
+        if actual.lower() != expected_sha256.lower():
+            raise RuntimeError(
+                "Update integrity check failed (sha256 mismatch); aborting.")
+        logger.info("Update sha256 verified: %s", actual)
+
+    safety.safe_extract(zip_path, dest_path)
     return dest_path
 
 

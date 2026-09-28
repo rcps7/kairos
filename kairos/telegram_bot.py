@@ -44,37 +44,42 @@ class TelegramBot:
         try:
             self.app = ApplicationBuilder().token(token).build()
 
-            self.app.add_handler(CommandHandler("start", self.start_command))
-            self.app.add_handler(CommandHandler("chat", self.chat_command))
-            self.app.add_handler(CommandHandler("search", self.search_command))
-            self.app.add_handler(CommandHandler("learn", self.learn_command))
-            self.app.add_handler(CommandHandler("download", self.download_command))
-            self.app.add_handler(CommandHandler("skills", self.skills_command))
-            self.app.add_handler(CommandHandler("runs", self.run_skill_command))
-            self.app.add_handler(CommandHandler("newskill", self.new_skill_command))
-            self.app.add_handler(CommandHandler("mail", self.mail_command))
-            self.app.add_handler(CommandHandler("sendmail", self.send_mail_command))
-            self.app.add_handler(CommandHandler("expired", self.expired_command))
-            self.app.add_handler(CommandHandler("providers", self.providers_command))
-            self.app.add_handler(CommandHandler("setllm", self.setllm_command))
-            self.app.add_handler(CommandHandler("reflect", self.reflect_command))
-            self.app.add_handler(CommandHandler("lessons", self.lessons_command))
-            self.app.add_handler(CommandHandler("ports", self.ports_command))
-            self.app.add_handler(CommandHandler("open", self.open_command))
-            self.app.add_handler(CommandHandler("send", self.send_command))
-            self.app.add_handler(CommandHandler("read", self.read_command))
-            self.app.add_handler(CommandHandler("close", self.close_command))
-            self.app.add_handler(CommandHandler("remember", self.remember_command))
-            self.app.add_handler(CommandHandler("memory", self.memory_command))
-            self.app.add_handler(CommandHandler("predict", self.predict_command))
-            self.app.add_handler(CommandHandler("character", self.character_command))
-            self.app.add_handler(CommandHandler("setcharacter", self.setcharacter_command))
-            self.app.add_handler(CommandHandler("graph", self.graph_command))
-            self.app.add_handler(CommandHandler("graphstats", self.graphstats_command))
-            self.app.add_handler(CommandHandler("graphdel", self.graphdel_command))
-            self.app.add_handler(CommandHandler("pending", self.pending_command))
-            self.app.add_handler(CommandHandler("kill", self.kill_command))
-            self.app.add_handler(CallbackQueryHandler(self.button_handler))
+            commands = [
+                ("start", self.start_command),
+                ("chat", self.chat_command),
+                ("search", self.search_command),
+                ("learn", self.learn_command),
+                ("download", self.download_command),
+                ("skills", self.skills_command),
+                ("runs", self.run_skill_command),
+                ("newskill", self.new_skill_command),
+                ("mail", self.mail_command),
+                ("sendmail", self.send_mail_command),
+                ("expired", self.expired_command),
+                ("providers", self.providers_command),
+                ("setllm", self.setllm_command),
+                ("reflect", self.reflect_command),
+                ("lessons", self.lessons_command),
+                ("ports", self.ports_command),
+                ("open", self.open_command),
+                ("send", self.send_command),
+                ("read", self.read_command),
+                ("close", self.close_command),
+                ("remember", self.remember_command),
+                ("memory", self.memory_command),
+                ("predict", self.predict_command),
+                ("character", self.character_command),
+                ("setcharacter", self.setcharacter_command),
+                ("graph", self.graph_command),
+                ("graphstats", self.graphstats_command),
+                ("graphdel", self.graphdel_command),
+                ("pending", self.pending_command),
+                ("kill", self.kill_command),
+            ]
+            for name, handler in commands:
+                self.app.add_handler(CommandHandler(name, self._guard(handler)))
+            self.app.add_handler(CommandHandler("whoami", self.whoami_command))
+            self.app.add_handler(CallbackQueryHandler(self._guard_cb(self.button_handler)))
 
             await self.app.initialize()
             await self.app.start()
@@ -100,7 +105,64 @@ class TelegramBot:
             await self.app.stop()
             await self.app.shutdown()
 
+    # ------------------------------------------------------------------
+    # Authorization (manual allowlist)
+    # ------------------------------------------------------------------
+    def _allowed_ids(self):
+        try:
+            cfg = config.load_config().get("telegram", {}) or {}
+            out = set()
+            for x in cfg.get("allowed_user_ids", []) or []:
+                try:
+                    out.add(int(str(x).strip()))
+                except (TypeError, ValueError):
+                    continue
+            return out
+        except Exception:
+            return set()
+
+    def _authorized(self, update: Update) -> bool:
+        try:
+            uid = update.effective_user.id if update.effective_user else None
+        except Exception:
+            uid = None
+        return uid is not None and uid in self._allowed_ids()
+
+    def _guard(self, handler):
+        async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
+            if not self._authorized(update):
+                uid = update.effective_user.id if update.effective_user else "?"
+                logger.warning("Unauthorized Telegram command from user id %s", uid)
+                try:
+                    await update.message.reply_text(
+                        "Unauthorized. Ask the owner to add your Telegram user ID "
+                        f"({uid}) to the allowlist (send /whoami to see it).")
+                except Exception:
+                    pass
+                return
+            return await handler(update, context)
+        return wrapper
+
+    def _guard_cb(self, handler):
+        async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
+            if not self._authorized(update):
+                try:
+                    await update.callback_query.answer("Unauthorized.", show_alert=True)
+                except Exception:
+                    pass
+                return
+            return await handler(update, context)
+        return wrapper
+
+    async def whoami_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        uid = update.effective_user.id if update.effective_user else "?"
+        await update.message.reply_text(
+            f"Your Telegram user ID is {uid}. "
+            "Add it in Kairos -> Edit -> Telegram Settings -> Allowed user IDs.")
+
     def _register_chat(self, update: Update):
+        if not self._authorized(update):
+            return
         if update.effective_chat:
             self._chat_ids.add(update.effective_chat.id)
 
@@ -283,7 +345,8 @@ class TelegramBot:
             "/setcharacter <id> - activate a character\n"
             "/graph <query> - search the knowledge graph\n"
             "/pending - review proposed knowledge\n"
-            "/graphdel <id> - delete a graph entity"
+            "/graphdel <id> - delete a graph entity\n"
+            "/whoami - show your Telegram user ID"
         )
 
     async def chat_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):

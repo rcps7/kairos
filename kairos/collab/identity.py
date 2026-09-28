@@ -69,6 +69,11 @@ def spki_fp_from_cert_der(der: bytes) -> str:
     return _spki_sha256(cert.public_key())
 
 
+def cert_not_after_utc(der: bytes):
+    from cryptography import x509
+    return x509.load_der_x509_certificate(der).not_valid_after_utc
+
+
 def _generate(label: str, directory=None):
     from cryptography import x509
     from cryptography.hazmat.primitives import hashes, serialization

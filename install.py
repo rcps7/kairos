@@ -11,9 +11,9 @@ ROOT = Path(__file__).resolve().parent
 VENV = ROOT / "venv"
 
 
-def run(cmd):
-    print(">", cmd)
-    return subprocess.call(cmd, shell=True)
+def run(args):
+    print(">", " ".join(str(a) for a in args))
+    return subprocess.call([str(a) for a in args])
 
 
 def main():
@@ -21,22 +21,25 @@ def main():
     print("  KAIROS - Self-Evolving AI Agent  installer")
     print("=" * 60)
 
-    if sys.version_info < (3, 9):
-        print("[ERROR] Python 3.9+ is required.")
+    if sys.version_info < (3, 10):
+        print("[ERROR] Python 3.10+ is required.")
         return 1
 
     if not (VENV / "Scripts" / "python.exe").exists():
         print("Creating virtual environment...")
-        run(f'"{sys.executable}" -m venv "{VENV}"')
+        run([sys.executable, "-m", "venv", str(VENV)])
 
     python = VENV / "Scripts" / "python.exe"
-    pip = VENV / "Scripts" / "pip.exe"
 
     print("Upgrading pip...")
-    run(f'"{python}" -m pip install --upgrade pip')
+    run([python, "-m", "pip", "install", "--upgrade", "pip"])
 
     print("Installing dependencies (this may take several minutes)...")
-    run(f'"{pip}" install -r "{ROOT / "requirements.txt"}"')
+    if (ROOT / "requirements.lock").exists():
+        req = ROOT / "requirements.lock"
+    else:
+        req = ROOT / "requirements.txt"
+    run([python, "-m", "pip", "install", "-r", str(req)])
 
     print()
     print("=" * 60)

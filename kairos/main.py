@@ -33,7 +33,7 @@ from kairos.skills import SkillManager
 from kairos.storage.knowledge import KnowledgeStore
 from kairos.storage.media import MediaStore
 from kairos.telegram_bot import TelegramBot
-from kairos.watchdog import HEARTBEAT_FILE, KILLSWITCH_FILE, PID_FILE
+from kairos.watchdog import HEARTBEAT_FILE, KILLSWITCH_FILE, PID_FILE, TOKEN_FILE
 from kairos.web import WebSearcher, WebScraper, summarize_with_llm
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -90,6 +90,8 @@ class KairosEngine:
         self._stop_event = threading.Event()
         self._heartbeat_stop = threading.Event()
         self._in_chat = False
+        self._extract_busy = threading.Event()
+        self.main_thread_caller = None  # set by the GUI for UI-opening skills
         self._write_pid()
         self._start_heartbeat()
 
@@ -102,6 +104,8 @@ class KairosEngine:
     def _write_pid(self):
         try:
             PID_FILE.write_text(str(os.getpid()), encoding="utf-8")
+            import secrets
+            TOKEN_FILE.write_text(secrets.token_hex(16), encoding="utf-8")
         except Exception:
             pass
 
@@ -351,9 +355,19 @@ class KairosEngine:
         cfg = self._graph_cfg()
         if not self.graph or not cfg.get("enabled", True) or not cfg.get("extract_on_chat", True):
             return
-        threading.Thread(
-            target=self.ingest_graph, args=(text, source, kind), daemon=True
-        ).start()
+        # At most one extraction in flight (coalesce/drop the rest) so bursts of
+        # messages cannot spawn unbounded threads.
+        if self._extract_busy.is_set():
+            return
+        self._extract_busy.set()
+
+        def run():
+            try:
+                self.ingest_graph(text, source, kind)
+            finally:
+                self._extract_busy.clear()
+
+        threading.Thread(target=run, daemon=True).start()
 
     def backfill_graph_memory(self, force: bool = False) -> int:
         """Copy existing retained memories + document summaries into the graph."""
@@ -725,6 +739,12 @@ class KairosEngine:
                 f"Skill '{name}' is not available to the "
                 f"'{prof.get('name', 'current')}' character."
             )
+        skill = self.skills.skills.get(name)
+        if (getattr(skill, "uses_ui", False) and self.main_thread_caller
+                and threading.current_thread() is not threading.main_thread()):
+            # UI skills must run on the Qt main thread.
+            return self.main_thread_caller(
+                lambda: self.skills.run_skill(name, self, **kwargs))
         return self.skills.run_skill(name, self, **kwargs)
 
     def generate_skill(self, name: str, description: str) -> str:

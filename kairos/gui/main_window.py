@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                                QMessageBox, QToolBar, QGroupBox, QFrame,
                                QGridLayout, QComboBox, QTreeWidget, QTreeWidgetItem,
                                QScrollArea, QMenu, QTabWidget)
-from PySide6.QtCore import Qt, Signal, QThread, QSize, QTimer, QBuffer, QByteArray, QIODevice
+from PySide6.QtCore import Qt, Signal, QThread, QSize, QTimer, QBuffer, QByteArray, QIODevice, QObject
 from PySide6.QtGui import QAction, QFont, QColor, QPalette, QIcon, QTextCursor, QPixmap
 
 try:
@@ -50,6 +50,30 @@ def _merge_save(mutate):
     mutate(cfg)
     save_config(cfg)
     return load_config()
+
+
+class _MainThreadInvoker(QObject):
+    """Run a callable on the Qt main thread and return its result (blocking)."""
+
+    _call = Signal(object)
+
+    def __init__(self):
+        super().__init__()
+        self._call.connect(self._handle, Qt.BlockingQueuedConnection)
+
+    def _handle(self, box):
+        fn, holder = box
+        try:
+            holder["result"] = fn()
+        except Exception as e:
+            holder["error"] = e
+
+    def __call__(self, fn):
+        holder = {}
+        self._call.emit((fn, holder))
+        if "error" in holder:
+            raise holder["error"]
+        return holder.get("result")
 
 
 class LLMWorker(QThread):
@@ -106,15 +130,16 @@ class UpdateDownloadWorker(QThread):
     done = Signal(str)
     failed = Signal(str)
 
-    def __init__(self, url):
+    def __init__(self, url, digest=None):
         super().__init__()
         self.url = url
+        self.digest = digest
 
     def run(self):
         try:
             import tempfile
             tmp = tempfile.mkdtemp(prefix="kairos_update_")
-            updater.download_and_extract(self.url, tmp)
+            updater.download_and_extract(self.url, tmp, expected_sha256=self.digest)
             root = updater.find_update_root(tmp)
             self.done.emit(str(root))
         except Exception as e:
@@ -443,7 +468,7 @@ class TelegramDialog(QDialog):
         self.engine = engine
         self.setWindowTitle("Telegram Settings")
         self.setStyleSheet(_dialog_style())
-        self.resize(520, 220)
+        self.resize(520, 260)
         layout = QFormLayout(self)
         layout.setSpacing(12)
 
@@ -453,6 +478,12 @@ class TelegramDialog(QDialog):
         current = engine.config.get("telegram_token") or ""
         self.token_edit.setText(current)
         layout.addRow("Bot Token:", self.token_edit)
+
+        self.allowed_edit = QLineEdit()
+        self.allowed_edit.setPlaceholderText("e.g. 123456789, 987654321  (blank = nobody)")
+        existing = (engine.config.get("telegram", {}) or {}).get("allowed_user_ids", [])
+        self.allowed_edit.setText(", ".join(str(x) for x in existing))
+        layout.addRow("Allowed user IDs:", self.allowed_edit)
 
         self.show_check = QCheckBox("Show token")
         self.show_check.toggled.connect(
@@ -530,6 +561,19 @@ class TelegramDialog(QDialog):
                 pass
         self.engine.config = _merge_save(
             lambda c: c.__setitem__("telegram_token", token or None)
+        )
+        ids = []
+        for part in self.allowed_edit.text().replace(";", ",").split(","):
+            part = part.strip()
+            if not part:
+                continue
+            if not part.lstrip("-").isdigit():
+                QMessageBox.warning(self, "Kairos",
+                                    f"Ignoring invalid Telegram user ID: {part}")
+                continue
+            ids.append(int(part))
+        self.engine.config = _merge_save(
+            lambda c: c.setdefault("telegram", {}).__setitem__("allowed_user_ids", ids)
         )
         try:
             self.engine.restart_telegram()
@@ -2561,6 +2605,11 @@ class KairosGUI(QMainWindow):
         self._deep_timer = None
         self._thinking_elapsed = 0
         self.collab_windows = {}
+        try:
+            self._invoker = _MainThreadInvoker()
+            engine.main_thread_caller = self._invoker
+        except Exception:
+            self._invoker = None
         self.sig_collab_incoming.connect(self._on_collab_incoming)
         self.sig_collab_connected.connect(self._on_collab_connected)
         self.sig_collab_chat.connect(self._on_collab_chat)
@@ -2952,7 +3001,7 @@ class KairosGUI(QMainWindow):
             return
         self.update_btn.setText("Downloading...")
         self.update_btn.setEnabled(False)
-        self._dl_worker = UpdateDownloadWorker(url)
+        self._dl_worker = UpdateDownloadWorker(url, info.get("asset_digest"))
         self._dl_worker.done.connect(self._on_update_downloaded)
         self._dl_worker.failed.connect(self._on_update_failed)
         self._dl_worker.start()
