@@ -478,9 +478,20 @@ Kairos includes standard agentic building blocks:
 - **Scheduler** — durable interval tasks (ask the LLM or run a skill) with
   Telegram control: `/task <name> <minutes> | <prompt>`, `/tasks`,
   `/deltask <name>` (`kairos/scheduler.py`).
+- **Streaming** — responses stream token-by-token into the console
+  (`agent.streaming`).
+- **Structured output** — validated JSON with automatic retries
+  (`kairos/structured.py`).
+- **Plans / todo** — durable multi-step plans (`kairos/planner.py`), with
+  Telegram `/newplan`, `/plans`, `/plan`.
+- **Platform tools** — confined `read_file`/`write_file`/`list_dir` and an
+  opt-in, sandboxed `run_command` (`agent.file_root`, `agent.allow_file_write`,
+  `agent.allow_shell`).
+- **Tracing & budgets** — per-call spans (`kairos/tracing.py`) and an optional
+  daily token budget (`agent.budgets.daily_tokens`).
 
 Planned additions: Model Context Protocol (MCP) client, browser automation,
-data connectors, and response streaming.
+data connectors, text-to-SQL, image generation and a container skill sandbox.
 
 ---
 

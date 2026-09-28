@@ -7,6 +7,15 @@ returned tool calls. All tool output is treated as untrusted data.
 
 import json
 import logging
+import os
+import subprocess
+
+from kairos import safety
+
+try:
+    from kairos import config as _config
+except Exception:
+    _config = None
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +48,26 @@ TOOL_SCHEMAS = [
         {"query": {"type": "string"}}, ["query"]),
     _fn("predict", "Run the predictive engine on a question.",
         {"question": {"type": "string"}}, ["question"]),
+    _fn("plan_create", "Create a multi-step plan for a goal.",
+        {"goal": {"type": "string"},
+         "steps": {"type": "array", "items": {"type": "string"}}}, ["goal"]),
+    _fn("plan_add_step", "Add a step to an existing plan.",
+        {"plan_id": {"type": "string"}, "title": {"type": "string"}},
+        ["plan_id", "title"]),
+    _fn("plan_update_step", "Update a plan step's status/result.",
+        {"step_id": {"type": "string"}, "status": {"type": "string"},
+         "result": {"type": "string"}}, ["step_id", "status"]),
+    _fn("plan_status", "Show a plan and its steps.",
+        {"plan_id": {"type": "string"}}, ["plan_id"]),
+    _fn("read_file", "Read a text file inside the allowed root.",
+        {"path": {"type": "string"}}, ["path"]),
+    _fn("write_file", "Write a text file inside the allowed root.",
+        {"path": {"type": "string"}, "content": {"type": "string"}},
+        ["path", "content"]),
+    _fn("list_dir", "List files in a directory inside the allowed root.",
+        {"path": {"type": "string"}}, []),
+    _fn("run_command", "Run a shell command (disabled unless explicitly enabled).",
+        {"command": {"type": "string"}}, ["command"]),
 ]
 
 _CAP = {
@@ -48,7 +77,37 @@ _CAP = {
     "remember": "memory",
     "recall": None,
     "predict": "predict",
+    "plan_create": None,
+    "plan_add_step": None,
+    "plan_update_step": None,
+    "plan_status": None,
+    "read_file": None,
+    "write_file": None,
+    "list_dir": None,
+    "run_command": None,
 }
+
+
+def _agent_cfg():
+    try:
+        if _config is None:
+            return {}
+        return (_config.load_config().get("agent", {}) or {})
+    except Exception:
+        return {}
+
+
+def _file_root():
+    root = _agent_cfg().get("file_root") or str(os.path.expanduser("~"))
+    return os.path.abspath(root)
+
+
+def _confine(path: str) -> str:
+    root = _file_root()
+    target = os.path.abspath(os.path.join(root, path or ""))
+    if target != root and not target.startswith(root + os.sep):
+        raise PermissionError("Path is outside the allowed root.")
+    return target
 
 
 def available_tools(engine) -> list:
@@ -86,4 +145,46 @@ def execute(engine, name: str, args: dict) -> str:
     if name == "predict":
         res = engine.predict(args.get("question", ""))
         return res.get("report", "")
+    if name == "plan_create":
+        pid = engine.plan_create(args.get("goal", ""), args.get("steps") or [])
+        return f"Plan created: {pid}"
+    if name == "plan_add_step":
+        sid = engine.plan_add_step(args.get("plan_id", ""), args.get("title", ""))
+        return f"Step added: {sid}"
+    if name == "plan_update_step":
+        engine.plan_update_step(args.get("step_id", ""), args.get("status", ""),
+                                args.get("result", ""))
+        return "Step updated."
+    if name == "plan_status":
+        p = engine.plan_get(args.get("plan_id", ""))
+        if not p:
+            return "Plan not found."
+        lines = [f"{p['goal']} [{p['status']}]"]
+        for s in p["steps"]:
+            lines.append(f"  {s['idx']}. [{s['status']}] {s['title']}")
+        return "\n".join(lines)
+    if name == "read_file":
+        p = _confine(args.get("path", ""))
+        with open(p, "rb") as f:
+            return f.read(200000).decode("utf-8", "ignore")
+    if name == "write_file":
+        if not _agent_cfg().get("allow_file_write", True):
+            raise PermissionError("File writes are disabled (agent.allow_file_write).")
+        p = _confine(args.get("path", ""))
+        d = os.path.dirname(p)
+        if d:
+            os.makedirs(d, exist_ok=True)
+        safety.atomic_write_text(p, args.get("content", ""))
+        return f"Wrote {p}"
+    if name == "list_dir":
+        p = _confine(args.get("path", "") or ".")
+        return "\n".join(sorted(os.listdir(p))[:500])
+    if name == "run_command":
+        if not _agent_cfg().get("allow_shell", False):
+            raise PermissionError("Shell execution is disabled (agent.allow_shell).")
+        import tempfile
+        out = subprocess.run(args.get("command", ""), shell=True, capture_output=True,
+                             text=True, timeout=30, cwd=tempfile.gettempdir(),
+                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        return (out.stdout + out.stderr)[:8000]
     raise PermissionError(f"Unknown or disallowed tool '{name}'.")

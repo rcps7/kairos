@@ -78,6 +78,9 @@ class TelegramBot:
                 ("tasks", self.tasks_command),
                 ("task", self.task_command),
                 ("deltask", self.deltask_command),
+                ("plans", self.plans_command),
+                ("newplan", self.newplan_command),
+                ("plan", self.plan_command),
                 ("kill", self.kill_command),
             ]
             for name, handler in commands:
@@ -757,6 +760,35 @@ class TelegramBot:
             return
         n = await asyncio.to_thread(self.engine.delete_scheduled_task, context.args[0])
         await update.message.reply_text(f"Deleted {n} task(s).")
+
+    async def plans_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        plans = await asyncio.to_thread(self.engine.plan_list, 20)
+        if not plans:
+            await update.message.reply_text("No plans.")
+            return
+        lines = ["Plans:"] + [f"- {p[0]}  {p[1][:60]}  [{p[2]}]" for p in plans]
+        await update.message.reply_text("\n".join(lines)[:3800])
+
+    async def newplan_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        goal = " ".join(context.args)
+        if not goal:
+            await update.message.reply_text("Usage: /newplan <goal>")
+            return
+        pid = await asyncio.to_thread(self.engine.plan_create, goal, [])
+        await update.message.reply_text(f"Plan created: {pid}")
+
+    async def plan_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not context.args:
+            await update.message.reply_text("Usage: /plan <plan_id>")
+            return
+        p = await asyncio.to_thread(self.engine.plan_get, context.args[0])
+        if not p:
+            await update.message.reply_text("Plan not found.")
+            return
+        lines = [f"{p['goal']} [{p['status']}]"]
+        for s in p["steps"]:
+            lines.append(f"{s['idx']}. [{s['status']}] {s['title']}")
+        await update.message.reply_text("\n".join(lines)[:3800])
 
     async def kill_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Confirm before engaging the kill switch."""

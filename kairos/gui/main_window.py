@@ -79,6 +79,7 @@ class _MainThreadInvoker(QObject):
 class LLMWorker(QThread):
     finished = Signal(str)
     progress = Signal(str)
+    chunk = Signal(str)
 
     def __init__(self, engine, prompt, task="chat", attachments=None):
         super().__init__()
@@ -92,11 +93,20 @@ class LLMWorker(QThread):
             if self.task == "reflect":
                 reply = self.engine.reflect()
             else:
-                reply = self.engine.chat(
-                    self.prompt or "",
-                    attachment_paths=self.attachments,
-                    progress=lambda t: self.progress.emit(t),
-                )
+                cfg = self.engine.config.get("agent", {}) or {}
+                if cfg.get("streaming", True) and hasattr(self.engine, "stream_chat"):
+                    parts = []
+                    for piece in self.engine.stream_chat(
+                            self.prompt or "", attachment_paths=self.attachments):
+                        parts.append(piece)
+                        self.chunk.emit(piece)
+                    reply = "".join(parts)
+                else:
+                    reply = self.engine.chat(
+                        self.prompt or "",
+                        attachment_paths=self.attachments,
+                        progress=lambda t: self.progress.emit(t),
+                    )
             self.finished.emit(reply)
         except Exception as e:
             self.finished.emit(f"[Error] {e}")
@@ -3597,10 +3607,12 @@ class KairosGUI(QMainWindow):
             self._update_attachment_label()
         self.chat_input.clear()
         self._pending_kairos_bubble = self._append_bubble("Kairos", "...", "kairos", GREEN)
+        self._stream_buf = ""
         self._set_mood("thinking")
         self._start_deep_thinking_timer()
         self.worker = LLMWorker(self.engine, text, attachments=attachments)
         self.worker.finished.connect(self.on_llm_reply)
+        self.worker.chunk.connect(self._on_llm_chunk)
         self.worker.progress.connect(
             lambda t: self._append_bubble("Kairos", t, "system", TEXT_GREY)
         )
@@ -3647,6 +3659,13 @@ class KairosGUI(QMainWindow):
         self._set_mood("error")
         self._append_bubble("Council error", msg, "system", RED)
         QTimer.singleShot(2500, self._reset_mood)
+
+    def _on_llm_chunk(self, text):
+        if not text:
+            return
+        self._stream_buf = getattr(self, "_stream_buf", "") + text
+        if getattr(self, "_pending_kairos_bubble", None):
+            self._pending_kairos_bubble.set_text(self._stream_buf)
 
     def on_llm_reply(self, reply: str):
         self._stop_deep_thinking_timer()

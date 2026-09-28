@@ -1,4 +1,5 @@
 import base64
+import json
 import mimetypes
 
 import httpx
@@ -164,6 +165,50 @@ class LLMClient:
         except Exception:
             self.last_usage = None
         return data.get("choices", [{}])[0].get("message", {}) or {}
+
+    def stream_text(self, user_prompt: str, system_prompt: str = "You are a helpful assistant.",
+                    provider_id: str = None):
+        """Yield text deltas from an SSE chat stream (OpenAI-compatible)."""
+        pid = provider_id or self.active_provider
+        p = self.providers.get(pid)
+        if not p:
+            raise RuntimeError(f"LLM provider '{pid}' not configured.")
+        if not p.get("api_key"):
+            raise RuntimeError(f"API key missing for provider '{pid}'.")
+        headers = {"Authorization": f"Bearer {p['api_key']}", "Content-Type": "application/json"}
+        payload = {
+            "model": p.get("model"),
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "stream": True,
+        }
+        self.last_usage = None
+        with self.client.stream("POST", p["api_url"], headers=headers, json=payload) as r:
+            if r.status_code >= 400:
+                r.read()
+                raise RuntimeError(f"LLM error {r.status_code} ({pid}): {r.text[:300]}")
+            for line in r.iter_lines():
+                if not line or not line.startswith("data:"):
+                    continue
+                data = line[5:].strip()
+                if data == "[DONE]":
+                    break
+                try:
+                    obj = json.loads(data)
+                except Exception:
+                    continue
+                u = obj.get("usage")
+                if u:
+                    self.last_usage = {
+                        "provider": pid, "model": p.get("model"),
+                        "prompt_tokens": int(u.get("prompt_tokens") or 0) or 1,
+                        "completion_tokens": int(u.get("completion_tokens") or 0) or 1,
+                    }
+                ch = (obj.get("choices", [{}])[0].get("delta", {}) or {}).get("content")
+                if ch:
+                    yield ch
 
     def close(self):
         self.client.close()

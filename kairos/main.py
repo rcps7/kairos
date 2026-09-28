@@ -36,6 +36,8 @@ from kairos.storage.media import MediaStore
 from kairos.telegram_bot import TelegramBot
 from kairos.usage import UsageStore
 from kairos.scheduler import SchedulerLoop, SchedulerStore
+from kairos.planner import PlannerStore
+from kairos.tracing import SpanStore
 from kairos.watchdog import HEARTBEAT_FILE, KILLSWITCH_FILE, PID_FILE, TOKEN_FILE
 from kairos.web import WebSearcher, WebScraper, summarize_with_llm
 
@@ -77,6 +79,8 @@ class KairosEngine:
         self.learning = ErrorMemory()
         self.usage = UsageStore()
         self.scheduler = SchedulerStore()
+        self.planner = PlannerStore()
+        self.tracing = SpanStore()
         self.scheduler_loop = None
         if (self.config.get("scheduler", {}) or {}).get("enabled", True):
             self.scheduler_loop = SchedulerLoop(
@@ -155,6 +159,9 @@ class KairosEngine:
     def ask_llm(self, prompt: str, provider_id: str = None, system_prompt: str = None,
                 use_character: bool = True, with_tools: bool = False) -> str:
         try:
+            if self._budget_exceeded():
+                raise RuntimeError("Daily token budget exceeded (agent.budgets.daily_tokens). "
+                                   "Raise or disable the budget to continue.")
             if use_character:
                 system_prompt = self.current_system_prompt(
                     system_prompt, with_tools=with_tools
@@ -176,8 +183,20 @@ class KairosEngine:
         try:
             self.usage.add(u.get("provider"), u.get("model"),
                            u.get("prompt_tokens", 0), u.get("completion_tokens", 0), source)
+            self.tracing.add(source, u.get("provider"), u.get("model"),
+                             u.get("prompt_tokens", 0), u.get("completion_tokens", 0))
         except Exception:
             pass
+
+    def _budget_exceeded(self) -> bool:
+        try:
+            budget = int((self.config.get("agent", {}) or {}).get(
+                "budgets", {}).get("daily_tokens", 0) or 0)
+            if budget <= 0:
+                return False
+            return self.usage.summary(1).get("total_tokens", 0) >= budget
+        except Exception:
+            return False
 
     def usage_summary(self, days: int = 30) -> dict:
         try:
@@ -193,6 +212,28 @@ class KairosEngine:
 
     def delete_scheduled_task(self, name: str) -> int:
         return self.scheduler.delete(name)
+
+    # ---- Plans / todo ----
+    def plan_create(self, goal: str, steps=None) -> str:
+        return self.planner.create(goal, steps)
+
+    def plan_get(self, plan_id: str):
+        return self.planner.get_plan(plan_id)
+
+    def plan_list(self, limit: int = 50) -> list:
+        return self.planner.list_plans(limit)
+
+    def plan_add_step(self, plan_id: str, title: str) -> str:
+        return self.planner.add_step(plan_id, title)
+
+    def plan_update_step(self, step_id: str, status: str, result: str = ""):
+        return self.planner.update_step(step_id, status, result)
+
+    def plan_set_status(self, plan_id: str, status: str):
+        return self.planner.set_status(plan_id, status)
+
+    def plan_delete(self, plan_id: str):
+        return self.planner.delete(plan_id)
 
     def generate_with_images(self, prompt: str, image_paths, provider_id: str = None,
                              system_prompt: str = None, use_character: bool = True) -> str:
@@ -623,6 +664,36 @@ class KairosEngine:
             cfg = self._graph_cfg()
             if cfg.get("use_in_chat", True) or cfg.get("use_in_tools", True):
                 self.spawn_graph_extract(prompt, source="chat", kind="chat")
+
+    def stream_chat(self, prompt: str, attachment_paths=None):
+        """Yield response text as it streams from the provider (falls back on error)."""
+        try:
+            context, images = ("", [])
+            if attachment_paths:
+                try:
+                    context, images = self.attach_context(attachment_paths)
+                except Exception as e:
+                    self.record_error("chat.attachments", e)
+                    context, images = ("", [])
+            user_content = self._build_user_content(prompt, context)
+            if images:
+                vis = [p for p in self.list_providers() if self.llm.is_vision(p)]
+                if vis:
+                    yield self.generate_with_images(user_content, images, provider_id=vis[0])
+                    return
+            got = False
+            system = self.current_system_prompt()
+            for piece in self.llm.stream_text(user_content, system_prompt=system):
+                got = True
+                yield piece
+            if not got:
+                yield self.ask_llm(user_content)
+            self._record_usage("chat.stream")
+        except Exception as e:
+            self.record_error("chat.stream", e)
+            yield self.chat(prompt, attachment_paths=attachment_paths)
+        finally:
+            self.spawn_graph_extract(prompt, "chat", "chat")
 
     def _chat_native(self, user_content: str, progress=None) -> str:
         """Native function-calling loop (OpenAI-style tools)."""
@@ -1096,6 +1167,14 @@ class KairosEngine:
             pass
         try:
             self.scheduler.close()
+        except Exception:
+            pass
+        try:
+            self.planner.close()
+        except Exception:
+            pass
+        try:
+            self.tracing.close()
         except Exception:
             pass
         self.predictive_store.close()

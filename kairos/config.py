@@ -80,7 +80,14 @@ DEFAULT_CONFIG = {
         "idle_timeout": 300
     },
     "agent": {
-        "native_tools": False
+        "native_tools": False,
+        "streaming": True,
+        "file_root": None,
+        "allow_file_write": True,
+        "allow_shell": False,
+        "budgets": {
+            "daily_tokens": 0
+        }
     },
     "scheduler": {
         "enabled": True,
