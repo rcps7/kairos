@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import os
 import sys
@@ -17,7 +18,7 @@ from kairos.characters_presets import GENERAL_PROMPT
 from kairos.council import Council
 from kairos.graph_memory import GraphMemory
 from kairos.pending_store import PendingStore
-from kairos import memory_extract
+from kairos import guardrails, memory_extract
 from kairos.tools import build_tool_protocol, format_tool_results, parse_tool_calls
 from kairos.email_client import EmailClient
 from kairos.gui.main_window import KairosGUI
@@ -33,6 +34,8 @@ from kairos.skills import SkillManager
 from kairos.storage.knowledge import KnowledgeStore
 from kairos.storage.media import MediaStore
 from kairos.telegram_bot import TelegramBot
+from kairos.usage import UsageStore
+from kairos.scheduler import SchedulerLoop, SchedulerStore
 from kairos.watchdog import HEARTBEAT_FILE, KILLSWITCH_FILE, PID_FILE, TOKEN_FILE
 from kairos.web import WebSearcher, WebScraper, summarize_with_llm
 
@@ -72,6 +75,14 @@ class KairosEngine:
         self.email = EmailClient()
         self.retention = RetentionManager(self)
         self.learning = ErrorMemory()
+        self.usage = UsageStore()
+        self.scheduler = SchedulerStore()
+        self.scheduler_loop = None
+        if (self.config.get("scheduler", {}) or {}).get("enabled", True):
+            self.scheduler_loop = SchedulerLoop(
+                self, self.scheduler,
+                int((self.config.get("scheduler", {}) or {}).get("poll_seconds", 5)))
+            self.scheduler_loop.start()
         self.predictive_store = PredictiveStore()
         self.mirofish = MiroFishClient(self.config.get("mirofish", {}).get("base_url", "http://localhost:5001"))
         self.quick_predictor = QuickPredictor(self)
@@ -148,12 +159,40 @@ class KairosEngine:
                 system_prompt = self.current_system_prompt(
                     system_prompt, with_tools=with_tools
                 )
-            if system_prompt:
-                return self.llm.generate(prompt, system_prompt=system_prompt, provider_id=provider_id)
-            return self.llm.generate(prompt, provider_id=provider_id)
+            result = (
+                self.llm.generate(prompt, system_prompt=system_prompt, provider_id=provider_id)
+                if system_prompt else self.llm.generate(prompt, provider_id=provider_id)
+            )
+            self._record_usage("chat")
+            return result
         except Exception as e:
             self.record_error("llm.generate", e)
             raise
+
+    def _record_usage(self, source: str = "chat"):
+        u = getattr(self.llm, "last_usage", None)
+        if not u:
+            return
+        try:
+            self.usage.add(u.get("provider"), u.get("model"),
+                           u.get("prompt_tokens", 0), u.get("completion_tokens", 0), source)
+        except Exception:
+            pass
+
+    def usage_summary(self, days: int = 30) -> dict:
+        try:
+            return self.usage.summary(days)
+        except Exception:
+            return {"total_calls": 0, "total_tokens": 0, "by_provider": []}
+
+    def add_scheduled_task(self, name: str, kind: str, payload: str, interval_seconds: int):
+        return self.scheduler.add(name, kind, payload, interval_seconds)
+
+    def list_scheduled_tasks(self) -> list:
+        return self.scheduler.list()
+
+    def delete_scheduled_task(self, name: str) -> int:
+        return self.scheduler.delete(name)
 
     def generate_with_images(self, prompt: str, image_paths, provider_id: str = None,
                              system_prompt: str = None, use_character: bool = True) -> str:
@@ -180,6 +219,7 @@ class KairosEngine:
             parts.append(build_tool_protocol(self.characters.capabilities()))
         if extra:
             parts.append(extra)
+        parts.append(guardrails.guardrail_note())
         return "\n\n".join(parts)
 
     def character_capabilities(self) -> list:
@@ -536,6 +576,10 @@ class KairosEngine:
                         user_content, images, provider_id=vis[0]
                     )
 
+            agent_cfg = self.config.get("agent", {}) or {}
+            if agent_cfg.get("native_tools") and hasattr(self.llm, "generate_messages"):
+                return self._chat_native(user_content, progress=progress)
+
             conversation = user_content
             reply = ""
             for round_index in range(MAX_TOOL_ROUNDS):
@@ -552,7 +596,8 @@ class KairosEngine:
                                      f"{call.query or call.url}".strip())
                         except Exception:
                             pass
-                    results.append((call, self._run_tool(call)))
+                    results.append((call, guardrails.wrap_untrusted(
+                        call.name, self._run_tool(call))))
 
                 conversation = (
                     f"{conversation}\n\nASSISTANT TOOL REQUEST:\n{reply}\n\n"
@@ -579,25 +624,60 @@ class KairosEngine:
             if cfg.get("use_in_chat", True) or cfg.get("use_in_tools", True):
                 self.spawn_graph_extract(prompt, source="chat", kind="chat")
 
+    def _chat_native(self, user_content: str, progress=None) -> str:
+        """Native function-calling loop (OpenAI-style tools)."""
+        from kairos.toolkit import available_tools, execute
+
+        system = self.current_system_prompt()
+        tools = available_tools(self)
+        messages = [{"role": "system", "content": system},
+                    {"role": "user", "content": user_content}]
+        reply = ""
+        for _ in range(MAX_TOOL_ROUNDS):
+            msg = self.llm.generate_messages(messages, tools=tools)
+            self._record_usage("chat.tools")
+            calls = msg.get("tool_calls") or []
+            reply = msg.get("content") or reply
+            if not calls:
+                return reply or ""
+            messages.append({"role": "assistant", "content": msg.get("content") or "",
+                             "tool_calls": calls})
+            for c in calls:
+                fn = c.get("function", {}) or {}
+                name = fn.get("name", "")
+                try:
+                    args = json.loads(fn.get("arguments") or "{}")
+                except Exception:
+                    args = {}
+                if progress:
+                    try:
+                        progress(f"Running tool: {name}")
+                    except Exception:
+                        pass
+                try:
+                    out = execute(self, name, args)
+                except Exception as e:
+                    out = f"(tool error: {e})"
+                messages.append({"role": "tool", "tool_call_id": c.get("id"),
+                                 "content": guardrails.wrap_untrusted(name, str(out))})
+        return reply or ""
+
     def _build_user_content(self, prompt: str, context: str) -> str:
         sections = []
         if context:
-            sections.append(f"ATTACHED MATERIAL:\n{context}")
+            sections.append(guardrails.wrap_untrusted("ATTACHMENTS", context))
         try:
             related = self.knowledge.recall(prompt, limit=6)
         except Exception:
             related = []
         if related:
             recall = "\n".join(f"- {item['text'][:400]}" for item in related)
-            sections.append(
-                "RELATED INFORMATION FROM RETAINED MEMORY (use only if relevant "
-                "to the question; ignore unrelated items):\n" + recall
-            )
+            sections.append(guardrails.wrap_untrusted("RETAINED MEMORY", recall))
         cfg = self._graph_cfg()
         if cfg.get("enabled", True) and cfg.get("use_in_chat", True):
             graph_ctx = self.graph_context(prompt)
             if graph_ctx:
-                sections.append(graph_ctx)
+                sections.append(guardrails.wrap_untrusted("KNOWLEDGE GRAPH", graph_ctx))
         sections.append(f"USER QUESTION:\n{prompt}")
         return "\n\n".join(sections)
 
@@ -1008,6 +1088,16 @@ class KairosEngine:
         self.web_search.close()
         self.web_scrape.close()
         self.learning.close()
+        self.usage.close()
+        try:
+            if self.scheduler_loop:
+                self.scheduler_loop.stop()
+        except Exception:
+            pass
+        try:
+            self.scheduler.close()
+        except Exception:
+            pass
         self.predictive_store.close()
         self.mirofish.close()
         try:

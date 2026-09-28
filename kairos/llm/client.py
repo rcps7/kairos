@@ -12,6 +12,7 @@ class LLMClient:
         self.providers = cfg.get("llm_providers", {})
         self.active_provider = cfg.get("active_llm", "moonshot")
         self.client = httpx.Client(timeout=180.0)
+        self.last_usage = None
 
     def get_active(self) -> dict:
         return self.providers.get(self.active_provider, {})
@@ -81,7 +82,21 @@ class LLMClient:
         if resp.status_code >= 400:
             raise RuntimeError(f"LLM error {resp.status_code} ({pid}): {resp.text[:500]}")
         data = resp.json()
-        return data.get("choices", [{}])[0].get("message", {}).get("content", "")
+        content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+        self.last_usage = None
+        try:
+            u = data.get("usage") or {}
+            pt = int(u.get("prompt_tokens") or 0)
+            ct = int(u.get("completion_tokens") or 0)
+            self.last_usage = {
+                "provider": pid,
+                "model": p.get("model"),
+                "prompt_tokens": pt or max(1, (len(user_prompt) + len(system_prompt)) // 4),
+                "completion_tokens": ct or max(1, len(content or "") // 4),
+            }
+        except Exception:
+            self.last_usage = None
+        return content
 
     def generate_with_images(self, user_prompt: str, image_paths, system_prompt: str = "You are a helpful assistant.", provider_id: str = None) -> str:
         """Send a text prompt plus one or more images (OpenAI-compatible format)."""
@@ -120,6 +135,35 @@ class LLMClient:
             raise RuntimeError(f"LLM error {resp.status_code} ({pid}): {resp.text[:500]}")
         data = resp.json()
         return data.get("choices", [{}])[0].get("message", {}).get("content", "")
+
+    def generate_messages(self, messages, tools=None, provider_id=None):
+        """Low-level chat with an explicit message list; supports native tools."""
+        pid = provider_id or self.active_provider
+        p = self.providers.get(pid)
+        if not p:
+            raise RuntimeError(f"LLM provider '{pid}' not configured.")
+        if not p.get("api_key"):
+            raise RuntimeError(f"API key missing for provider '{pid}'.")
+        headers = {"Authorization": f"Bearer {p['api_key']}", "Content-Type": "application/json"}
+        payload = {"model": p.get("model"), "messages": messages}
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = "auto"
+        resp = self.client.post(p["api_url"], headers=headers, json=payload)
+        if resp.status_code >= 400:
+            raise RuntimeError(f"LLM error {resp.status_code} ({pid}): {resp.text[:500]}")
+        data = resp.json()
+        self.last_usage = None
+        try:
+            u = data.get("usage") or {}
+            self.last_usage = {
+                "provider": pid, "model": p.get("model"),
+                "prompt_tokens": int(u.get("prompt_tokens") or 0) or 1,
+                "completion_tokens": int(u.get("completion_tokens") or 0) or 1,
+            }
+        except Exception:
+            self.last_usage = None
+        return data.get("choices", [{}])[0].get("message", {}) or {}
 
     def close(self):
         self.client.close()

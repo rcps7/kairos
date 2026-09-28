@@ -462,6 +462,28 @@ link — no central server required. Each install has an identity key; you share
 
 ---
 
+## Agent Capabilities
+
+Kairos includes standard agentic building blocks:
+
+- **Native tool-calling** — an OpenAI-style tool registry (`kairos/toolkit.py`)
+  for web search, page learning, scraping, memory and prediction. Enable with
+  `agent.native_tools` in the config (falls back to the built-in text tool
+  protocol when off).
+- **Guardrails** — prompt-injection detection, secret/PII redaction, and
+  untrusted-content wrapping for everything fetched from the web, tools,
+  attachments or peers (`kairos/guardrails.py`).
+- **Usage & cost accounting** — per-call token usage stored locally; view with
+  `/usage` on Telegram (`kairos/usage.py`).
+- **Scheduler** — durable interval tasks (ask the LLM or run a skill) with
+  Telegram control: `/task <name> <minutes> | <prompt>`, `/tasks`,
+  `/deltask <name>` (`kairos/scheduler.py`).
+
+Planned additions: Model Context Protocol (MCP) client, browser automation,
+data connectors, and response streaming.
+
+---
+
 ## Knowledge Library & Media Storage
 
 ### Storage location

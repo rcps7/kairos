@@ -78,6 +78,13 @@ DEFAULT_CONFIG = {
         "max_file_bytes": 536870912,
         "accept_timeout": 60,
         "idle_timeout": 300
+    },
+    "agent": {
+        "native_tools": False
+    },
+    "scheduler": {
+        "enabled": True,
+        "poll_seconds": 5
     }
 }
 

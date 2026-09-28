@@ -74,6 +74,10 @@ class TelegramBot:
                 ("graphstats", self.graphstats_command),
                 ("graphdel", self.graphdel_command),
                 ("pending", self.pending_command),
+                ("usage", self.usage_command),
+                ("tasks", self.tasks_command),
+                ("task", self.task_command),
+                ("deltask", self.deltask_command),
                 ("kill", self.kill_command),
             ]
             for name, handler in commands:
@@ -693,6 +697,66 @@ class TelegramBot:
             )
         except Exception as e:
             await update.message.reply_text(f"Prediction error: {e}")
+
+    async def usage_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        try:
+            s = await asyncio.to_thread(self.engine.usage_summary, 30)
+        except Exception as e:
+            await update.message.reply_text(f"Usage error: {e}")
+            return
+        lines = [f"LLM usage (last {s.get('days', 30)} days)",
+                 f"Calls: {s.get('total_calls', 0)}   Tokens: {s.get('total_tokens', 0)}"]
+        for p in s.get("by_provider", [])[:10]:
+            lines.append(f"- {p['provider']}: {p['calls']} calls, "
+                         f"{p['prompt_tokens'] + p['completion_tokens']} tokens")
+        await update.message.reply_text("\n".join(lines)[:3800])
+
+    async def notify_task(self, name, result):
+        if not self._chat_ids or not self.app:
+            return
+        for chat_id in list(self._chat_ids):
+            try:
+                await self.app.bot.send_message(
+                    chat_id=chat_id, text=f"[scheduled task: {name}]\n{str(result)[:3500]}")
+            except Exception:
+                pass
+
+    async def tasks_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        tasks = await asyncio.to_thread(self.engine.list_scheduled_tasks)
+        if not tasks:
+            await update.message.reply_text("No scheduled tasks.")
+            return
+        lines = ["Scheduled tasks:"]
+        for t in tasks:
+            _tid, name, kind, payload, interval, _next, _enabled, _last_run, last_result = t
+            lines.append(f"- {name} [{kind}] every {interval}s | last: {(last_result or '')[:120]}")
+        await update.message.reply_text("\n".join(lines)[:3800])
+
+    async def task_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        raw = " ".join(context.args)
+        if "|" not in raw:
+            await update.message.reply_text("Usage: /task <name> <minutes> | <prompt>")
+            return
+        head, prompt = raw.split("|", 1)
+        parts = head.split()
+        if len(parts) < 2:
+            await update.message.reply_text("Usage: /task <name> <minutes> | <prompt>")
+            return
+        name = parts[0]
+        try:
+            secs = max(10, int(parts[1]) * 60)
+        except ValueError:
+            await update.message.reply_text("Minutes must be a whole number.")
+            return
+        await asyncio.to_thread(self.engine.add_scheduled_task, name, "ask", prompt.strip(), secs)
+        await update.message.reply_text(f"Scheduled task '{name}' every {parts[1]} min.")
+
+    async def deltask_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not context.args:
+            await update.message.reply_text("Usage: /deltask <name>")
+            return
+        n = await asyncio.to_thread(self.engine.delete_scheduled_task, context.args[0])
+        await update.message.reply_text(f"Deleted {n} task(s).")
 
     async def kill_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Confirm before engaging the kill switch."""
