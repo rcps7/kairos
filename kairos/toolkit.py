@@ -84,6 +84,10 @@ TOOL_SCHEMAS = [
         {"url": {"type": "string"}}, ["url"]),
     _fn("browser_screenshot", "Screenshot a web page and save it.",
         {"url": {"type": "string"}}, ["url"]),
+    _fn("delegate", "Delegate a task to a named sub-agent (researcher, coder, "
+        "analyst, writer, planner).",
+        {"agent": {"type": "string"}, "task": {"type": "string"}},
+        ["agent", "task"]),
 ]
 
 _CAP = {
@@ -109,6 +113,7 @@ _CAP = {
     "generate_image": None,
     "browser_fetch": "learn_web",
     "browser_screenshot": "learn_web",
+    "delegate": None,
 }
 
 
@@ -241,6 +246,9 @@ def execute(engine, name: str, args: dict) -> str:
     if name == "browser_screenshot":
         from kairos import browser
         return "Screenshot saved: " + browser.screenshot(args.get("url", ""))
+    if name == "delegate":
+        from kairos import agents
+        return agents.run_subagent(engine, args.get("agent", ""), args.get("task", ""))
     if name.startswith("mcp__"):
         from kairos import mcp_client
         return mcp_client.call(name, args)

@@ -85,6 +85,7 @@ DEFAULT_CONFIG = {
         "file_root": None,
         "allow_file_write": True,
         "allow_shell": False,
+        "skill_sandbox": "subprocess",
         "budgets": {
             "daily_tokens": 0
         },

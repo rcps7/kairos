@@ -512,6 +512,14 @@ data connectors, text-to-SQL, image generation and a container skill sandbox.
 - **Discord channel** — optional bot with a manual user allowlist mirroring
   `!chat`, `!search`, `!remember` (`kairos/discord_bot.py`; config `discord`).
 
+### Wave 4 (orchestration & quality)
+- **Sub-agents** — named specialists (researcher, coder, analyst, writer,
+  planner) reachable via the `delegate` tool (`kairos/agents.py`).
+- **Evaluation harness** — offline smoke checks of the security/agent
+  primitives (`kairos/evaluation.py`; run `python -m kairos.evaluation`).
+- **Docker skill sandbox** — optional stronger isolation for skills
+  (`agent.skill_sandbox: "docker"`; falls back to the subprocess sandbox).
+
 ---
 
 ## Knowledge Library & Media Storage

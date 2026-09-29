@@ -96,6 +96,54 @@ def _child_env():
     }
 
 
+def pump_rpc(proc, engine, timeout: float = 30.0) -> str:
+    """Serve a running child's stdio RPC requests until it returns a result."""
+    killer = threading.Timer(timeout, proc.kill)
+    killer.start()
+    try:
+        saw_output = False
+        while True:
+            line = proc.stdout.readline()
+            if not line:
+                break
+            saw_output = True
+            try:
+                msg = json.loads(line)
+            except Exception:
+                continue
+            if msg.get("done"):
+                if msg.get("error"):
+                    raise RuntimeError(safety.redact_secrets(str(msg["error"])))
+                return msg.get("result", "")
+            rpc = msg.get("rpc")
+            if rpc:
+                method = rpc.get("method")
+                a = rpc.get("args", {})
+                try:
+                    if method not in ALLOWED_METHODS:
+                        raise PermissionError(f"method '{method}' is not allowed")
+                    result = getattr(engine, method)(**a)
+                    if not isinstance(result, (str, int, float, bool, type(None))):
+                        result = str(result)
+                    proc.stdin.write(json.dumps({"result": result}) + "\n")
+                except Exception as e:
+                    proc.stdin.write(json.dumps({"error": safety.redact_secrets(str(e))}) + "\n")
+                proc.stdin.flush()
+        if not saw_output:
+            raise SandboxUnavailable("skill sandbox produced no output")
+        raise RuntimeError("skill sandbox ended without a result")
+    finally:
+        killer.cancel()
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        try:
+            proc.wait(timeout=5)
+        except Exception:
+            pass
+
+
 def run_skill_sandboxed(skill_path, engine, args=None, timeout: float = 30.0) -> str:
     skill_path = Path(skill_path)
     with tempfile.TemporaryDirectory(prefix="kairos_skill_") as cwd:
@@ -109,47 +157,4 @@ def run_skill_sandboxed(skill_path, engine, args=None, timeout: float = 30.0) ->
             )
         except OSError as e:
             raise SandboxUnavailable(str(e)) from e
-        killer = threading.Timer(timeout, proc.kill)
-        killer.start()
-        try:
-            saw_output = False
-            while True:
-                line = proc.stdout.readline()
-                if not line:
-                    break
-                saw_output = True
-                try:
-                    msg = json.loads(line)
-                except Exception:
-                    continue
-                if msg.get("done"):
-                    if msg.get("error"):
-                        raise RuntimeError(safety.redact_secrets(str(msg["error"])))
-                    return msg.get("result", "")
-                rpc = msg.get("rpc")
-                if rpc:
-                    method = rpc.get("method")
-                    a = rpc.get("args", {})
-                    try:
-                        if method not in ALLOWED_METHODS:
-                            raise PermissionError(f"method '{method}' is not allowed")
-                        result = getattr(engine, method)(**a)
-                        if not isinstance(result, (str, int, float, bool, type(None))):
-                            result = str(result)
-                        proc.stdin.write(json.dumps({"result": result}) + "\n")
-                    except Exception as e:
-                        proc.stdin.write(json.dumps({"error": safety.redact_secrets(str(e))}) + "\n")
-                    proc.stdin.flush()
-            if not saw_output:
-                raise SandboxUnavailable("skill sandbox produced no output")
-            raise RuntimeError("skill sandbox ended without a result")
-        finally:
-            killer.cancel()
-            try:
-                proc.kill()
-            except Exception:
-                pass
-            try:
-                proc.wait(timeout=5)
-            except Exception:
-                pass
+        return pump_rpc(proc, engine, timeout)

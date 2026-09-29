@@ -101,15 +101,26 @@ class SkillManager:
         # UI skills must run in-process (on the main thread) so they can open
         # Qt dialogs; they cannot be sandboxed.
         if sandbox and not getattr(skill, "uses_ui", False):
+            path = self.source_path(name)
+            mode = ((getattr(engine, "config", {}) or {}).get("agent", {}) or {}).get(
+                "skill_sandbox", "subprocess")
+            if mode == "docker":
+                try:
+                    from .docker_runner import run_skill_docker, SandboxUnavailable
+                    try:
+                        return run_skill_docker(path, engine, kwargs)
+                    except SandboxUnavailable as e:
+                        logger.warning("Docker sandbox unavailable (%s); using subprocess.", e)
+                except ImportError:
+                    pass
             try:
                 from .runner import run_skill_sandboxed, SandboxUnavailable
-            except ImportError:
-                run_skill_sandboxed = None
-            if run_skill_sandboxed is not None:
                 try:
-                    return run_skill_sandboxed(self.source_path(name), engine, kwargs)
+                    return run_skill_sandboxed(path, engine, kwargs)
                 except SandboxUnavailable as e:
                     logger.warning("Skill sandbox unavailable (%s); running in-process.", e)
+            except ImportError:
+                pass
         return skill.run(engine, **kwargs)
 
     def create_skill(self, name: str, description: str, code: str) -> Path:
