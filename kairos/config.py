@@ -92,6 +92,14 @@ DEFAULT_CONFIG = {
     "scheduler": {
         "enabled": True,
         "poll_seconds": 5
+    },
+    "mcp": {
+        "enabled": False,
+        "servers": {}
+    },
+    "connectors": {
+        "github": {"enabled": False, "token": None},
+        "notion": {"enabled": False, "token": None}
     }
 }
 

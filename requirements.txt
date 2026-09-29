@@ -21,3 +21,4 @@ cryptography>=42
 pycrdt>=0.14.6
 qrcode>=7.4
 zeroconf>=0.130
+duckdb>=1.0

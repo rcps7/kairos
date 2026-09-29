@@ -493,6 +493,15 @@ Kairos includes standard agentic building blocks:
 Planned additions: Model Context Protocol (MCP) client, browser automation,
 data connectors, text-to-SQL, image generation and a container skill sandbox.
 
+### Wave 2 (connectors & data)
+- **Text-to-SQL** — read-only DuckDB queries over registered CSV/Parquet files
+  (`kairos/sql_tool.py`, tool `sql_query`).
+- **MCP client** — connect stdio MCP servers and expose their tools
+  (`kairos/mcp_client.py`; config `mcp.servers`).
+- **Data connectors** — GitHub and Notion over httpx with keyring-stored tokens
+  (`kairos/connectors/`; tools `github_*`, `notion_search`; config
+  `connectors.*.enabled`).
+
 ---
 
 ## Knowledge Library & Media Storage

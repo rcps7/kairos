@@ -68,6 +68,16 @@ TOOL_SCHEMAS = [
         {"path": {"type": "string"}}, []),
     _fn("run_command", "Run a shell command (disabled unless explicitly enabled).",
         {"command": {"type": "string"}}, ["command"]),
+    _fn("sql_query", "Run a read-only SQL query over registered CSV/Parquet files.",
+        {"sql": {"type": "string"}}, ["sql"]),
+    _fn("github_search_repos", "Search GitHub repositories.",
+        {"query": {"type": "string"}}, ["query"]),
+    _fn("github_list_issues", "List issues in a GitHub repo (owner/name).",
+        {"repo": {"type": "string"}, "state": {"type": "string"}}, ["repo"]),
+    _fn("github_get_issue", "Get a GitHub issue.",
+        {"repo": {"type": "string"}, "number": {"type": "integer"}}, ["repo", "number"]),
+    _fn("notion_search", "Search Notion pages/databases.",
+        {"query": {"type": "string"}}, ["query"]),
 ]
 
 _CAP = {
@@ -85,6 +95,11 @@ _CAP = {
     "write_file": None,
     "list_dir": None,
     "run_command": None,
+    "sql_query": None,
+    "github_search_repos": None,
+    "github_list_issues": None,
+    "github_get_issue": None,
+    "notion_search": None,
 }
 
 
@@ -119,6 +134,12 @@ def available_tools(engine) -> list:
                 out.append(t)
         except Exception:
             out.append(t)
+    try:
+        from kairos import mcp_client
+        if mcp_client.enabled():
+            out.extend(mcp_client.tool_schemas())
+    except Exception:
+        pass
     return out
 
 
@@ -187,4 +208,22 @@ def execute(engine, name: str, args: dict) -> str:
                              text=True, timeout=30, cwd=tempfile.gettempdir(),
                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         return (out.stdout + out.stderr)[:8000]
+    if name == "sql_query":
+        from kairos import sql_tool
+        return sql_tool.run_sql(args.get("sql", ""), files=args.get("files"),
+                                root=_file_root())
+    if name.startswith("github_"):
+        from kairos.connectors import github as gh
+        if name == "github_search_repos":
+            return gh.search_repos(args.get("query", ""))
+        if name == "github_list_issues":
+            return gh.list_issues(args.get("repo", ""), args.get("state", "open"))
+        if name == "github_get_issue":
+            return gh.get_issue(args.get("repo", ""), int(args.get("number", 0)))
+    if name == "notion_search":
+        from kairos.connectors import notion as nt
+        return nt.search(args.get("query", ""))
+    if name.startswith("mcp__"):
+        from kairos import mcp_client
+        return mcp_client.call(name, args)
     raise PermissionError(f"Unknown or disallowed tool '{name}'.")
