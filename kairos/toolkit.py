@@ -78,6 +78,12 @@ TOOL_SCHEMAS = [
         {"repo": {"type": "string"}, "number": {"type": "integer"}}, ["repo", "number"]),
     _fn("notion_search", "Search Notion pages/databases.",
         {"query": {"type": "string"}}, ["query"]),
+    _fn("generate_image", "Generate an image from a prompt and save it.",
+        {"prompt": {"type": "string"}}, ["prompt"]),
+    _fn("browser_fetch", "Render a web page in a headless browser and return its text.",
+        {"url": {"type": "string"}}, ["url"]),
+    _fn("browser_screenshot", "Screenshot a web page and save it.",
+        {"url": {"type": "string"}}, ["url"]),
 ]
 
 _CAP = {
@@ -100,6 +106,9 @@ _CAP = {
     "github_list_issues": None,
     "github_get_issue": None,
     "notion_search": None,
+    "generate_image": None,
+    "browser_fetch": "learn_web",
+    "browser_screenshot": "learn_web",
 }
 
 
@@ -223,6 +232,15 @@ def execute(engine, name: str, args: dict) -> str:
     if name == "notion_search":
         from kairos.connectors import notion as nt
         return nt.search(args.get("query", ""))
+    if name == "generate_image":
+        from kairos import imagegen
+        return "Image saved: " + imagegen.generate(args.get("prompt", ""))
+    if name == "browser_fetch":
+        from kairos import browser
+        return browser.fetch_text(args.get("url", ""))
+    if name == "browser_screenshot":
+        from kairos import browser
+        return "Screenshot saved: " + browser.screenshot(args.get("url", ""))
     if name.startswith("mcp__"):
         from kairos import mcp_client
         return mcp_client.call(name, args)

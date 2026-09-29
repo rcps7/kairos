@@ -87,6 +87,12 @@ DEFAULT_CONFIG = {
         "allow_shell": False,
         "budgets": {
             "daily_tokens": 0
+        },
+        "image": {
+            "enabled": False,
+            "api_url": "",
+            "api_key": None,
+            "model": ""
         }
     },
     "scheduler": {
@@ -100,6 +106,11 @@ DEFAULT_CONFIG = {
     "connectors": {
         "github": {"enabled": False, "token": None},
         "notion": {"enabled": False, "token": None}
+    },
+    "discord": {
+        "enabled": False,
+        "allowed_user_ids": [],
+        "token": None
     }
 }
 

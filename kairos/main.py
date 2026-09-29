@@ -98,6 +98,8 @@ class KairosEngine:
             threading.Thread(target=self.backfill_graph_memory, daemon=True).start()
         self.collab = None
         self._init_collaboration()
+        self.discord = None
+        self._init_discord()
         self._loop = None
         self._thread = None
         self._retention_thread = None
@@ -203,6 +205,10 @@ class KairosEngine:
             return self.usage.summary(days)
         except Exception:
             return {"total_calls": 0, "total_tokens": 0, "by_provider": []}
+
+    def generate_image(self, prompt: str) -> str:
+        from kairos import imagegen
+        return imagegen.generate(prompt)
 
     def add_scheduled_task(self, name: str, kind: str, payload: str, interval_seconds: int):
         return self.scheduler.add(name, kind, payload, interval_seconds)
@@ -349,6 +355,17 @@ class KairosEngine:
         except Exception:
             logger.exception("Failed to initialise graph memory.")
             self.graph = None
+
+    def _init_discord(self):
+        if not (self.config.get("discord", {}) or {}).get("enabled"):
+            return
+        try:
+            from kairos.discord_bot import DiscordBot
+            self.discord = DiscordBot(self)
+            self.discord.start()
+        except Exception:
+            logger.exception("Failed to initialise Discord.")
+            self.discord = None
 
     def _init_collaboration(self):
         cfg = self.config.get("collaboration", {}) or {}
@@ -1187,6 +1204,11 @@ class KairosEngine:
         try:
             if self.collab:
                 self.collab.close()
+        except Exception:
+            pass
+        try:
+            if self.discord:
+                self.discord.stop()
         except Exception:
             pass
         try:

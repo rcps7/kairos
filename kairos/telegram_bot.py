@@ -81,6 +81,7 @@ class TelegramBot:
                 ("plans", self.plans_command),
                 ("newplan", self.newplan_command),
                 ("plan", self.plan_command),
+                ("image", self.image_command),
                 ("kill", self.kill_command),
             ]
             for name, handler in commands:
@@ -789,6 +790,19 @@ class TelegramBot:
         for s in p["steps"]:
             lines.append(f"{s['idx']}. [{s['status']}] {s['title']}")
         await update.message.reply_text("\n".join(lines)[:3800])
+
+    async def image_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        prompt = " ".join(context.args)
+        if not prompt:
+            await update.message.reply_text("Usage: /image <prompt>")
+            return
+        await update.message.reply_text("Generating image...")
+        try:
+            path = await asyncio.to_thread(self.engine.generate_image, prompt)
+        except Exception as e:
+            await update.message.reply_text(f"Image error: {e}")
+            return
+        await update.message.reply_text(f"Image saved: {path}")
 
     async def kill_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Confirm before engaging the kill switch."""

@@ -502,6 +502,16 @@ data connectors, text-to-SQL, image generation and a container skill sandbox.
   (`kairos/connectors/`; tools `github_*`, `notion_search`; config
   `connectors.*.enabled`).
 
+### Wave 3 (media & channels)
+- **Image generation** — OpenAI-compatible images endpoint via httpx
+  (`kairos/imagegen.py`; tool `generate_image`; Telegram `/image`; config
+  `agent.image`). Disabled until enabled + an API key is set.
+- **Browser automation** — headless Chromium render/screenshot
+  (`kairos/browser.py`; tools `browser_fetch`, `browser_screenshot`). Requires
+  `python -m playwright install chromium` once.
+- **Discord channel** — optional bot with a manual user allowlist mirroring
+  `!chat`, `!search`, `!remember` (`kairos/discord_bot.py`; config `discord`).
+
 ---
 
 ## Knowledge Library & Media Storage
