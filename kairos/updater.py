@@ -36,6 +36,7 @@ PROGRAM_FILES = [
     "install.py",
     "run.sh",
     "README.md",
+    "ROADMAP.md",
     "SECURITY.md",
     "LICENSE",
     "CONTRIBUTING.md",
