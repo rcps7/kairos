@@ -1,6 +1,6 @@
 # KAIROS Roadmap
 
-Current version: **0.12.0** · License: MIT (PolyForm Noncommercial for the app) ·
+Current version: **0.13.0** · License: MIT (PolyForm Noncommercial for the app) ·
 Repo: https://github.com/rcps7/kairos
 
 This document tracks completed work and the forward plan. Versions are cut as
@@ -55,6 +55,9 @@ self-update from Releases.
   render/screenshot); Discord channel (allowlist).
 - **Wave 4 (v0.12.0):** sub-agents + `delegate`; offline evaluation harness;
   optional Docker skill sandbox.
+- **Wave 5 (v0.13.0):** MCP **server** mode; browser actions (click/type/extract/
+  screenshot); Google Drive connector; Telegram streaming; GUI **Agent Settings +
+  Usage & Traces + Plans & Tasks** dialogs.
 
 ---
 
@@ -63,11 +66,7 @@ self-update from Releases.
 ### Near-term
 | Item | Notes | Priority |
 |------|-------|----------|
-| **Google Drive/Calendar connector** | Needs OAuth client + consent flow (unlike token-based GitHub/Notion). | High |
-| **Streaming on Telegram** | Throttled edit-in-place for `/chat`. | Medium |
 | **Native tool-calling coverage** | Enable `agent.native_tools` for more providers; surface in GUI settings. | Medium |
-| **GUI for plans/scheduler/usage** | Dialogs for plans, scheduled tasks and a usage/trace dashboard. | Medium |
-| **Config UI for Wave 2–4** | MCP servers, connectors, image, Discord, budgets in Settings. | Medium |
 
 ### Later
 - **Browser agent actions** — click/type/form-fill (not just render).

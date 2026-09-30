@@ -700,12 +700,12 @@ class CollaborationManager:
             if self._ngrok:
                 self._ngrok.stop()
         except Exception:
-            pass
+            logger.debug("ngrok stop failed", exc_info=True)
         try:
             if self._discovery:
                 self._discovery.close()
         except Exception:
-            pass
+            logger.debug("discovery close failed", exc_info=True)
         try:
             for sess in list(self._sessions.values()):
                 asyncio.run_coroutine_threadsafe(sess.close(), self._loop)

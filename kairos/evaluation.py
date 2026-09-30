@@ -57,6 +57,27 @@ def _check_config_merge():
     assert merged["a"] == {"b": 9, "c": 2}
 
 
+def _check_mcp_server():
+    from kairos import mcp_server
+    tools = mcp_server._handle("tools/list", {})["tools"]
+    assert any(t["name"] == "kairos_info" for t in tools)
+    out = mcp_server._handle("tools/call", {"name": "kairos_info"})
+    assert "Kairos" in out["content"][0]["text"]
+
+
+def _check_agents():
+    from kairos import agents
+    assert len(agents.list_subagents()) >= 5
+
+
+def _check_tool_coverage():
+    from kairos import toolkit
+    names = [t["function"]["name"] for t in toolkit.TOOL_SCHEMAS]
+    for n in ("browser_action", "google_search", "delegate", "sql_query",
+              "generate_image", "notion_search"):
+        assert n in names, f"missing tool {n}"
+
+
 CHECKS = [
     ("guardrails", _check_guardrails),
     ("safety", _check_safety),
@@ -64,6 +85,9 @@ CHECKS = [
     ("structured", _check_structured),
     ("tool registry", _check_tools),
     ("config merge", _check_config_merge),
+    ("mcp server", _check_mcp_server),
+    ("sub-agents", _check_agents),
+    ("tool coverage", _check_tool_coverage),
 ]
 
 

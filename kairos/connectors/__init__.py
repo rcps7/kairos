@@ -4,6 +4,6 @@ Tokens live in the OS keyring; nothing is written to config.json. Connectors
 are disabled unless explicitly enabled in config AND a token is present.
 """
 
-from . import github, notion  # noqa: F401
+from . import github, notion, google  # noqa: F401
 
-__all__ = ["github", "notion"]
+__all__ = ["github", "notion", "google"]

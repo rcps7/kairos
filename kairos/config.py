@@ -106,7 +106,8 @@ DEFAULT_CONFIG = {
     },
     "connectors": {
         "github": {"enabled": False, "token": None},
-        "notion": {"enabled": False, "token": None}
+        "notion": {"enabled": False, "token": None},
+        "google": {"enabled": False, "token": None}
     },
     "discord": {
         "enabled": False,

@@ -84,6 +84,11 @@ TOOL_SCHEMAS = [
         {"url": {"type": "string"}}, ["url"]),
     _fn("browser_screenshot", "Screenshot a web page and save it.",
         {"url": {"type": "string"}}, ["url"]),
+    _fn("browser_action", "Run browser actions (click/type/wait/text/screenshot) on a page.",
+        {"url": {"type": "string"},
+         "actions": {"type": "array", "items": {"type": "object"}}}, ["url"]),
+    _fn("google_search", "Search Google Drive files by name.",
+        {"query": {"type": "string"}}, ["query"]),
     _fn("delegate", "Delegate a task to a named sub-agent (researcher, coder, "
         "analyst, writer, planner).",
         {"agent": {"type": "string"}, "task": {"type": "string"}},
@@ -113,6 +118,8 @@ _CAP = {
     "generate_image": None,
     "browser_fetch": "learn_web",
     "browser_screenshot": "learn_web",
+    "browser_action": "learn_web",
+    "google_search": None,
     "delegate": None,
 }
 
@@ -237,6 +244,12 @@ def execute(engine, name: str, args: dict) -> str:
     if name == "notion_search":
         from kairos.connectors import notion as nt
         return nt.search(args.get("query", ""))
+    if name == "google_search":
+        from kairos.connectors import google as g
+        return g.search_files(args.get("query", ""))
+    if name == "browser_action":
+        from kairos import browser
+        return browser.run_actions(args.get("url", ""), args.get("actions") or [])
     if name == "generate_image":
         from kairos import imagegen
         return "Image saved: " + imagegen.generate(args.get("prompt", ""))

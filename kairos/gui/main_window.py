@@ -1641,9 +1641,29 @@ class ConnectDialog(QDialog):
 
     def _ok(self, sess):
         self.connect_btn.setEnabled(True)
+        label = sess.remote_label or sess.remote_fp[:12]
+        # Enforce an explicit out-of-band SAS check before trusting the peer.
+        try:
+            from kairos.collab import identity as _id
+            import asyncio as _asyncio
+            sas = _id.sas(self.engine.collab.identity.fp_hex, sess.remote_fp)
+            keep = QMessageBox.question(
+                self, "Verify Safety Code",
+                f"Connected to {label}.\n\nSafety code (SAS): {sas}\n\n"
+                "Compare this with your peer over another channel (e.g. voice). "
+                "Keep the connection?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+            if keep != QMessageBox.Yes:
+                try:
+                    _asyncio.run_coroutine_threadsafe(sess.close(), self.engine.collab._loop)
+                except Exception:
+                    pass
+                self.status.setText("Rejected (SAS not verified).")
+                return
+        except Exception:
+            pass
         self.status.setText("Connected.")
-        QMessageBox.information(self, "Kairos",
-                                f"Connected to {sess.remote_label or sess.remote_fp[:12]}.")
+        QMessageBox.information(self, "Kairos", f"Connected to {label}.")
         self.accept()
 
     def _fail(self, msg):
@@ -2153,6 +2173,222 @@ class DiscoverDialog(QDialog):
         self._cw.failed.connect(lambda m: (self.connect_btn.setEnabled(True),
                                            self.status.setText(f"Failed: {m}")))
         self._cw.start()
+
+
+class AgentSettingsDialog(QDialog):
+    """Configure agent capabilities, MCP, connectors, image gen and Discord."""
+
+    def __init__(self, engine, parent=None):
+        super().__init__(parent)
+        self.engine = engine
+        self.setWindowTitle("Agent Settings")
+        self.setStyleSheet(_dialog_style())
+        self.resize(640, 720)
+        import json as _json
+        cfg = engine.config
+        agent = cfg.get("agent", {}) or {}
+        layout = QVBoxLayout(self)
+
+        base = QGroupBox("Agent")
+        bf = QFormLayout(base)
+        self.streaming = QCheckBox("Stream responses")
+        self.streaming.setChecked(bool(agent.get("streaming", True)))
+        self.native_tools = QCheckBox("Native tool-calling")
+        self.native_tools.setChecked(bool(agent.get("native_tools", False)))
+        self.allow_write = QCheckBox("Allow file writes (confined)")
+        self.allow_write.setChecked(bool(agent.get("allow_file_write", True)))
+        self.allow_shell = QCheckBox("Allow shell commands")
+        self.allow_shell.setChecked(bool(agent.get("allow_shell", False)))
+        self.sandbox = QComboBox()
+        self.sandbox.addItems(["subprocess", "docker"])
+        self.sandbox.setCurrentText(agent.get("skill_sandbox", "subprocess"))
+        self.file_root = QLineEdit(agent.get("file_root") or "")
+        self.daily_tokens = QLineEdit(str((agent.get("budgets", {}) or {}).get("daily_tokens", 0)))
+        bf.addRow(self.streaming)
+        bf.addRow(self.native_tools)
+        bf.addRow(self.allow_write)
+        bf.addRow(self.allow_shell)
+        bf.addRow("Skill sandbox:", self.sandbox)
+        bf.addRow("File root:", self.file_root)
+        bf.addRow("Daily token budget (0=off):", self.daily_tokens)
+        layout.addWidget(base)
+
+        mcp = QGroupBox("MCP servers (JSON)")
+        mf = QVBoxLayout(mcp)
+        self.mcp_enabled = QCheckBox("Enable MCP")
+        self.mcp_enabled.setChecked(bool((cfg.get("mcp", {}) or {}).get("enabled")))
+        mf.addWidget(self.mcp_enabled)
+        self.mcp_edit = QTextEdit()
+        self.mcp_edit.setFont(QFont("Consolas", 9))
+        self.mcp_edit.setPlainText(_json.dumps((cfg.get("mcp", {}) or {}).get("servers", {}), indent=2))
+        mf.addWidget(self.mcp_edit, 1)
+        layout.addWidget(mcp)
+
+        conn = QGroupBox("Connectors (tokens stored in the OS keyring)")
+        cf = QFormLayout(conn)
+        ccfg = cfg.get("connectors", {}) or {}
+        self.gh_enabled = QCheckBox("GitHub enabled"); self.gh_enabled.setChecked(bool(ccfg.get("github", {}).get("enabled")))
+        self.gh_token = QLineEdit(); self.gh_token.setEchoMode(QLineEdit.Password); self.gh_token.setPlaceholderText("GitHub token")
+        self.nt_enabled = QCheckBox("Notion enabled"); self.nt_enabled.setChecked(bool(ccfg.get("notion", {}).get("enabled")))
+        self.nt_token = QLineEdit(); self.nt_token.setEchoMode(QLineEdit.Password); self.nt_token.setPlaceholderText("Notion token")
+        self.go_enabled = QCheckBox("Google Drive enabled"); self.go_enabled.setChecked(bool(ccfg.get("google", {}).get("enabled")))
+        self.go_token = QLineEdit(); self.go_token.setEchoMode(QLineEdit.Password); self.go_token.setPlaceholderText("Google OAuth access token")
+        cf.addRow(self.gh_enabled); cf.addRow("GitHub token:", self.gh_token)
+        cf.addRow(self.nt_enabled); cf.addRow("Notion token:", self.nt_token)
+        cf.addRow(self.go_enabled); cf.addRow("Google token:", self.go_token)
+        layout.addWidget(conn)
+
+        img = QGroupBox("Image generation")
+        inf = QFormLayout(img)
+        icfg = agent.get("image", {}) or {}
+        self.img_enabled = QCheckBox("Enabled"); self.img_enabled.setChecked(bool(icfg.get("enabled")))
+        self.img_url = QLineEdit(icfg.get("api_url", ""))
+        self.img_model = QLineEdit(icfg.get("model", ""))
+        self.img_key = QLineEdit(); self.img_key.setEchoMode(QLineEdit.Password); self.img_key.setPlaceholderText("API key")
+        inf.addRow(self.img_enabled); inf.addRow("API URL:", self.img_url)
+        inf.addRow("Model:", self.img_model); inf.addRow("API key:", self.img_key)
+        layout.addWidget(img)
+
+        disc = QGroupBox("Discord")
+        df = QFormLayout(disc)
+        dcfg = cfg.get("discord", {}) or {}
+        self.dc_enabled = QCheckBox("Enabled"); self.dc_enabled.setChecked(bool(dcfg.get("enabled")))
+        self.dc_ids = QLineEdit(", ".join(str(x) for x in dcfg.get("allowed_user_ids", [])))
+        self.dc_token = QLineEdit(); self.dc_token.setEchoMode(QLineEdit.Password); self.dc_token.setPlaceholderText("Discord bot token")
+        df.addRow(self.dc_enabled); df.addRow("Allowed user IDs:", self.dc_ids); df.addRow("Token:", self.dc_token)
+        layout.addWidget(disc)
+
+        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        btns.accepted.connect(self.accept)
+        btns.rejected.connect(self.reject)
+        layout.addWidget(btns)
+
+    def accept(self):
+        import json as _json
+        import keyring
+        schedule = self.sandbox.currentText()
+        try:
+            budget = int(self.daily_tokens.text() or 0)
+        except ValueError:
+            budget = 0
+        try:
+            servers = _json.loads(self.mcp_edit.toPlainText() or "{}")
+        except Exception as e:
+            QMessageBox.warning(self, "Kairos", f"MCP servers JSON invalid: {e}")
+            return
+        ids = [int(x) for x in self.dc_ids.text().replace(";", ",").split(",") if x.strip().lstrip("-").isdigit()]
+
+        def _apply(c):
+            a = c.setdefault("agent", {})
+            a["streaming"] = self.streaming.isChecked()
+            a["native_tools"] = self.native_tools.isChecked()
+            a["allow_file_write"] = self.allow_write.isChecked()
+            a["allow_shell"] = self.allow_shell.isChecked()
+            a["skill_sandbox"] = schedule
+            a["file_root"] = self.file_root.text().strip() or None
+            a.setdefault("budgets", {})["daily_tokens"] = budget
+            a.setdefault("image", {})
+            a["image"]["enabled"] = self.img_enabled.isChecked()
+            a["image"]["api_url"] = self.img_url.text().strip()
+            a["image"]["model"] = self.img_model.text().strip()
+            a["image"]["api_key"] = None
+            c.setdefault("mcp", {})["enabled"] = self.mcp_enabled.isChecked()
+            c["mcp"]["servers"] = servers
+            conn = c.setdefault("connectors", {})
+            conn.setdefault("github", {})["enabled"] = self.gh_enabled.isChecked()
+            conn.setdefault("notion", {})["enabled"] = self.nt_enabled.isChecked()
+            conn.setdefault("google", {})["enabled"] = self.go_enabled.isChecked()
+            for k in ("github", "notion", "google"):
+                conn[k]["token"] = None
+            d = c.setdefault("discord", {})
+            d["enabled"] = self.dc_enabled.isChecked()
+            d["allowed_user_ids"] = ids
+            d["token"] = None
+
+        self.engine.config = _merge_save(_apply)
+        for entry, edit in (("github_token", self.gh_token), ("notion_token", self.nt_token),
+                            ("google_token", self.go_token), ("image_api_key", self.img_key),
+                            ("discord_token", self.dc_token)):
+            val = edit.text().strip()
+            if val:
+                try:
+                    keyring.set_password("kairos", entry, val)
+                except Exception:
+                    pass
+        self.engine.config = __import__("kairos.config", fromlist=["load_config"]).load_config()
+        QMessageBox.information(self, "Kairos", "Agent settings saved.")
+        super().accept()
+
+
+class UsageTracesDialog(QDialog):
+    def __init__(self, engine, parent=None):
+        super().__init__(parent)
+        self.engine = engine
+        self.setWindowTitle("Usage & Traces")
+        self.setStyleSheet(_dialog_style())
+        self.resize(700, 520)
+        layout = QVBoxLayout(self)
+        row = QHBoxLayout()
+        refresh = QPushButton("Refresh")
+        refresh.clicked.connect(self._refresh)
+        row.addWidget(refresh); row.addStretch()
+        layout.addLayout(row)
+        self.view = QTextBrowser()
+        self.view.setStyleSheet(f"background-color: {BG_INPUT}; color: {TEXT};")
+        layout.addWidget(self.view, 1)
+        close = QPushButton("Close"); close.clicked.connect(self.accept)
+        layout.addWidget(close)
+        self._refresh()
+
+    def _refresh(self):
+        s = self.engine.usage_summary(30)
+        lines = [f"Usage (30 days): {s.get('total_calls',0)} calls, "
+                 f"{s.get('total_tokens',0)} tokens", ""]
+        for p in s.get("by_provider", []):
+            lines.append(f"  {p['provider']}: {p['calls']} calls, "
+                         f"{p['prompt_tokens'] + p['completion_tokens']} tokens")
+        lines.append("")
+        lines.append("Recent spans:")
+        try:
+            for ts, source, prov, model, pt, ct, ms, ok in self.engine.tracing.recent(20):
+                lines.append(f"  {ts[:19]} {source} {prov}/{model} "
+                             f"in={pt} out={ct} {ms}ms {'ok' if ok else 'err'}")
+        except Exception:
+            pass
+        self.view.setPlainText("\n".join(lines))
+
+
+class PlansDialog(QDialog):
+    def __init__(self, engine, parent=None):
+        super().__init__(parent)
+        self.engine = engine
+        self.setWindowTitle("Plans & Scheduled Tasks")
+        self.setStyleSheet(_dialog_style())
+        self.resize(720, 520)
+        layout = QVBoxLayout(self)
+        refresh = QPushButton("Refresh"); refresh.clicked.connect(self._refresh)
+        layout.addWidget(refresh)
+        self.view = QTextBrowser()
+        self.view.setStyleSheet(f"background-color: {BG_INPUT}; color: {TEXT};")
+        layout.addWidget(self.view, 1)
+        close = QPushButton("Close"); close.clicked.connect(self.accept)
+        layout.addWidget(close)
+        self._refresh()
+
+    def _refresh(self):
+        lines = ["PLANS", "====="]
+        for pid, goal, status, created in self.engine.plan_list(20):
+            lines.append(f"- [{status}] {goal}  ({pid})")
+            p = self.engine.plan_get(pid)
+            for st in (p or {}).get("steps", []):
+                lines.append(f"    {st['idx']}. [{st['status']}] {st['title']}")
+        lines.append("")
+        lines.append("SCHEDULED TASKS")
+        lines.append("===============")
+        for t in self.engine.list_scheduled_tasks():
+            _tid, name, kind, _payload, interval, _next, _en, _last, last_result = t
+            lines.append(f"- {name} [{kind}] every {interval}s | last: {(last_result or '')[:80]}")
+        self.view.setPlainText("\n".join(lines))
 
 
 class PredictWorker(QThread):
@@ -2740,6 +2976,18 @@ class KairosGUI(QMainWindow):
             return
         DiscoverDialog(self.engine, self).exec()
 
+    def open_agent_settings(self):
+        AgentSettingsDialog(self.engine, self).exec()
+        from kairos.config import load_config
+        self.engine.config = load_config()
+        self.refresh_status_bar()
+
+    def open_usage_dialog(self):
+        UsageTracesDialog(self.engine, self).exec()
+
+    def open_plans_dialog(self):
+        PlansDialog(self.engine, self).exec()
+
     def open_my_callsign_dialog(self):
         if not getattr(self.engine, "collab", None):
             QMessageBox.information(self, "Kairos", "Collaboration is not enabled.")
@@ -2906,6 +3154,11 @@ class KairosGUI(QMainWindow):
         collab_menu.addAction("Send File to Peer\u2026", self.open_send_file_dialog)
         collab_menu.addAction("Ask Peer's LLM\u2026", self.open_federated_dialog)
         collab_menu.addAction("Discover Peers\u2026", self.open_discover_dialog)
+
+        agent_menu = menubar.addMenu("&Agent")
+        agent_menu.addAction("Settings\u2026", self.open_agent_settings)
+        agent_menu.addAction("Usage & Traces\u2026", self.open_usage_dialog)
+        agent_menu.addAction("Plans & Tasks\u2026", self.open_plans_dialog)
 
         view_menu = menubar.addMenu("&View")
         view_menu.addAction("Self-Reflect", self.run_reflection)

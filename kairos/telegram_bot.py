@@ -362,11 +362,54 @@ class TelegramBot:
         if not prompt:
             await update.message.reply_text("Usage: /chat <message>")
             return
+        cfg = config.load_config().get("agent", {}) or {}
+        if cfg.get("streaming", True) and hasattr(self.engine, "stream_chat"):
+            await self._stream_chat(update, prompt)
+            return
         try:
             reply = await asyncio.to_thread(self.engine.chat, prompt)
-            await update.message.reply_text(reply)
+            await update.message.reply_text(reply[:3900])
         except Exception as e:
             await update.message.reply_text(f"LLM error: {e}")
+
+    async def _stream_chat(self, update: Update, prompt: str):
+        import queue
+        import threading
+        import time as _time
+        q = queue.Queue()
+
+        def worker():
+            try:
+                for piece in self.engine.stream_chat(prompt):
+                    q.put(("chunk", piece))
+                q.put(("done", None))
+            except Exception as e:
+                q.put(("error", str(e)))
+
+        threading.Thread(target=worker, daemon=True).start()
+        msg = await update.message.reply_text("…")
+        buf = ""
+        last = 0.0
+        while True:
+            kind, val = await asyncio.to_thread(q.get)
+            if kind == "chunk":
+                buf += val
+                now = _time.time()
+                if buf.strip() and now - last > 1.5:
+                    last = now
+                    try:
+                        await msg.edit_text(buf[:3900])
+                    except Exception:
+                        pass
+            elif kind == "error":
+                buf = f"LLM error: {val}"
+                break
+            else:
+                break
+        try:
+            await msg.edit_text((buf or "(no reply)")[:3900])
+        except Exception:
+            pass
 
     async def search_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         denied = self._capability_denied("web_search")

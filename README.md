@@ -520,6 +520,16 @@ data connectors, text-to-SQL, image generation and a container skill sandbox.
 - **Docker skill sandbox** — optional stronger isolation for skills
   (`agent.skill_sandbox: "docker"`; falls back to the subprocess sandbox).
 
+### Wave 5 (access & orchestration)
+- **MCP server mode** — expose Kairos tools over stdio: `python -m kairos.mcp_server`.
+- **Browser actions** — click/type/wait/extract/screenshot (`kairos/browser.py`;
+  tool `browser_action`).
+- **Google Drive connector** — token-based file search (`kairos/connectors/google.py`;
+  tool `google_search`).
+- **Telegram streaming** — `/chat` streams the reply in place.
+- **Agent Settings GUI** — configure agent flags, MCP, connectors, image gen and
+  Discord; plus **Usage & Traces** and **Plans & Tasks** dialogs (menu **Agent**).
+
 ---
 
 ## Knowledge Library & Media Storage
