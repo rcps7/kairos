@@ -210,6 +210,13 @@ class KairosEngine:
         from kairos import imagegen
         return imagegen.generate(prompt)
 
+    def computer_use(self, goal: str, url: str = None, progress=None) -> dict:
+        from kairos import computer
+        step_cb = None
+        if progress:
+            step_cb = lambda i, a, d: progress(f"step {i}: {a}")
+        return computer.run(self, goal, start_url=url, on_step=step_cb)
+
     def add_scheduled_task(self, name: str, kind: str, payload: str, interval_seconds: int):
         return self.scheduler.add(name, kind, payload, interval_seconds)
 
@@ -758,6 +765,16 @@ class KairosEngine:
             related = self.knowledge.recall(prompt, limit=6)
         except Exception:
             related = []
+        if related:
+            rag = self.config.get("rag", {}) or {}
+            if rag.get("rerank", True):
+                try:
+                    from kairos import rerank as _rerank
+                    related = _rerank.rerank(
+                        prompt, related, top_k=int(rag.get("top_k", 6)),
+                        embed_fn=getattr(self.knowledge, "_embed_fn", None))
+                except Exception:
+                    pass
         if related:
             recall = "\n".join(f"- {item['text'][:400]}" for item in related)
             sections.append(guardrails.wrap_untrusted("RETAINED MEMORY", recall))

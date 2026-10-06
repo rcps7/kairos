@@ -87,6 +87,8 @@ TOOL_SCHEMAS = [
     _fn("browser_action", "Run browser actions (click/type/wait/text/screenshot) on a page.",
         {"url": {"type": "string"},
          "actions": {"type": "array", "items": {"type": "object"}}}, ["url"]),
+    _fn("computer_task", "Drive a browser toward a goal (plan+act loop).",
+        {"goal": {"type": "string"}, "url": {"type": "string"}}, ["goal"]),
     _fn("google_search", "Search Google Drive files by name.",
         {"query": {"type": "string"}}, ["query"]),
     _fn("delegate", "Delegate a task to a named sub-agent (researcher, coder, "
@@ -119,6 +121,7 @@ _CAP = {
     "browser_fetch": "learn_web",
     "browser_screenshot": "learn_web",
     "browser_action": "learn_web",
+    "computer_task": "learn_web",
     "google_search": None,
     "delegate": None,
 }
@@ -250,6 +253,10 @@ def execute(engine, name: str, args: dict) -> str:
     if name == "browser_action":
         from kairos import browser
         return browser.run_actions(args.get("url", ""), args.get("actions") or [])
+    if name == "computer_task":
+        from kairos import computer
+        res = computer.run(engine, args.get("goal", ""), start_url=args.get("url"))
+        return res.get("result") or ("ok" if res.get("ok") else "failed")
     if name == "generate_image":
         from kairos import imagegen
         return "Image saved: " + imagegen.generate(args.get("prompt", ""))

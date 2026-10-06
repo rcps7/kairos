@@ -86,6 +86,18 @@ def _check_release_signing():
     serialization.load_pem_public_key(pem.encode("utf-8"))
 
 
+def _check_gui_split():
+    from kairos.gui import main_window as m
+    assert hasattr(m, "KairosGUI") and hasattr(m, "TelegramDialog")
+    assert hasattr(m, "MessageBubble") and hasattr(m, "LLMWorker")
+
+
+def _check_rag_and_computer():
+    from kairos import rerank, computer
+    assert rerank.rerank("x", [{"text": "x"}], embed_fn=None)
+    assert hasattr(computer, "run")
+
+
 CHECKS = [
     ("guardrails", _check_guardrails),
     ("safety", _check_safety),
@@ -97,6 +109,8 @@ CHECKS = [
     ("sub-agents", _check_agents),
     ("tool coverage", _check_tool_coverage),
     ("release signing", _check_release_signing),
+    ("gui split", _check_gui_split),
+    ("rag + computer", _check_rag_and_computer),
 ]
 
 

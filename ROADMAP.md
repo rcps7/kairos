@@ -1,6 +1,6 @@
 # KAIROS Roadmap
 
-Current version: **0.13.0** · License: MIT (PolyForm Noncommercial for the app) ·
+Current version: **0.14.0** · License: MIT (PolyForm Noncommercial for the app) ·
 Repo: https://github.com/rcps7/kairos
 
 This document tracks completed work and the forward plan. Versions are cut as
@@ -61,6 +61,8 @@ self-update from Releases.
 - **Release integrity (v0.13.1):** Ed25519-signed release bundles; the updater
   verifies the detached signature against a pinned in-repo public key
   (`kairos/release_signing.py`, `kairos/release_pubkey.pem`).
+- **Wave 6 (v0.14.0):** GUI split into modules; browser **computer-use** loop;
+  **RAG reranking** (cosine + lexical).
 
 ---
 
@@ -72,18 +74,14 @@ self-update from Releases.
 | **Native tool-calling coverage** | Enable `agent.native_tools` for more providers; surface in GUI settings. | Medium |
 
 ### Later
-- **Browser agent actions** — click/type/form-fill (not just render).
-- **Container sandbox polish** — bundled image, engine RPC hardening.
-- **MCP server mode** — publish Kairos tools *as* an MCP server.
-- **RAG improvements** — reranking, citations, per-character memory scoping.
-- **Evaluation expansion** — golden agent tasks + LLM-judge, wired into CI.
-- **Observability dashboard** — span timeline + cost charts in the GUI.
+- **MCP server tool coverage** — expose more tools / resources.
+- **RAG improvements** — citations and LLM-judge relevance.
+- **Evaluation expansion** — golden agent tasks + LLM-judge in CI.
+- **Observability dashboard** — cost charts in the GUI.
 - **Portable packaging** — signed installer, checksum manifest.
 
 ### Hardening / hygiene
-- **GUI refactor** — split `gui/main_window.py` into modules.
-- **Replace remaining silent `except` blocks** in non-critical paths.
-- **Rate/cost governance** — per-provider budgets and quotas (partly done).
+- **Per-provider cost governance.**
 - **Dependency automation** — Dependabot + scheduled lockfile refresh.
 
 ---

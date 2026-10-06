@@ -101,6 +101,10 @@ DEFAULT_CONFIG = {
         "enabled": True,
         "poll_seconds": 5
     },
+    "rag": {
+        "rerank": True,
+        "top_k": 6
+    },
     "mcp": {
         "enabled": False,
         "servers": {}

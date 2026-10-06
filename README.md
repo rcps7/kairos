@@ -530,6 +530,16 @@ data connectors, text-to-SQL, image generation and a container skill sandbox.
 - **Agent Settings GUI** — configure agent flags, MCP, connectors, image gen and
   Discord; plus **Usage & Traces** and **Plans & Tasks** dialogs (menu **Agent**).
 
+### Wave 6 (structure & retrieval)
+- **GUI refactor** — `main_window.py` split into `gui/common.py`, `gui/widgets.py`,
+  `gui/workers.py`, `gui/dialogs.py` (names re-exported for compatibility).
+- **Browser computer-use loop** — goal-driven plan/act/observe loop
+  (`kairos/computer.py`; tool `computer_task`).
+- **RAG reranking** — embedding (cosine) rerank with lexical fallback
+  (`kairos/rerank.py`; config `rag.rerank`, `rag.top_k`).
+- **Signed releases** — Ed25519-signed bundles verified by the updater against a
+  pinned public key (`kairos/release_signing.py`).
+
 ---
 
 ## Knowledge Library & Media Storage
