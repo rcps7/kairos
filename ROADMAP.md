@@ -58,6 +58,9 @@ self-update from Releases.
 - **Wave 5 (v0.13.0):** MCP **server** mode; browser actions (click/type/extract/
   screenshot); Google Drive connector; Telegram streaming; GUI **Agent Settings +
   Usage & Traces + Plans & Tasks** dialogs.
+- **Release integrity (v0.13.1):** Ed25519-signed release bundles; the updater
+  verifies the detached signature against a pinned in-repo public key
+  (`kairos/release_signing.py`, `kairos/release_pubkey.pem`).
 
 ---
 
@@ -78,7 +81,6 @@ self-update from Releases.
 - **Portable packaging** — signed installer, checksum manifest.
 
 ### Hardening / hygiene
-- **Signed releases** (Sigstore) for the updater.
 - **GUI refactor** — split `gui/main_window.py` into modules.
 - **Replace remaining silent `except` blocks** in non-critical paths.
 - **Rate/cost governance** — per-provider budgets and quotas (partly done).

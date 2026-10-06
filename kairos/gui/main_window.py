@@ -140,16 +140,18 @@ class UpdateDownloadWorker(QThread):
     done = Signal(str)
     failed = Signal(str)
 
-    def __init__(self, url, digest=None):
+    def __init__(self, url, digest=None, signature_url=None):
         super().__init__()
         self.url = url
         self.digest = digest
+        self.signature_url = signature_url
 
     def run(self):
         try:
             import tempfile
             tmp = tempfile.mkdtemp(prefix="kairos_update_")
-            updater.download_and_extract(self.url, tmp, expected_sha256=self.digest)
+            updater.download_and_extract(self.url, tmp, expected_sha256=self.digest,
+                                         signature_url=self.signature_url)
             root = updater.find_update_root(tmp)
             self.done.emit(str(root))
         except Exception as e:
@@ -3264,7 +3266,8 @@ class KairosGUI(QMainWindow):
             return
         self.update_btn.setText("Downloading...")
         self.update_btn.setEnabled(False)
-        self._dl_worker = UpdateDownloadWorker(url, info.get("asset_digest"))
+        self._dl_worker = UpdateDownloadWorker(url, info.get("asset_digest"),
+                                               info.get("signature_url"))
         self._dl_worker.done.connect(self._on_update_downloaded)
         self._dl_worker.failed.connect(self._on_update_failed)
         self._dl_worker.start()

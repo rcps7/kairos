@@ -27,6 +27,7 @@ security model, the hardening measures in place, and how to report issues.
 | Secrets | Keyring-only; never persisted on keyring failure; config ACL-restricted. |
 | Config | Atomic writes (tmp + replace) under a lock; recursive default backfill. |
 | Updater | GitHub release asset **sha256** verification; safe archive extraction (no zip-slip); explicit install confirmation. |
+| Release integrity | Bundles are signed with **Ed25519**; the updater verifies the detached `.sig` against an in-repo pinned public key (`kairos/release_pubkey.pem`) before extracting. |
 | Runtime bootstrap | Safe archive extraction; prefers trusted DLL sources. |
 | Collaboration | SSRF host policy (loopback/link-local/metadata blocked); frame caps; strict message schemas; rate limits; cert-expiry check. |
 | Watchdog | Kill socket requires a per-run **token**; PID image verified before terminating. |

@@ -78,6 +78,14 @@ def _check_tool_coverage():
         assert n in names, f"missing tool {n}"
 
 
+def _check_release_signing():
+    from cryptography.hazmat.primitives import serialization
+    from kairos import release_signing
+    pem = release_signing.load_public_key_pem()
+    assert "BEGIN PUBLIC KEY" in pem
+    serialization.load_pem_public_key(pem.encode("utf-8"))
+
+
 CHECKS = [
     ("guardrails", _check_guardrails),
     ("safety", _check_safety),
@@ -88,6 +96,7 @@ CHECKS = [
     ("mcp server", _check_mcp_server),
     ("sub-agents", _check_agents),
     ("tool coverage", _check_tool_coverage),
+    ("release signing", _check_release_signing),
 ]
 
 

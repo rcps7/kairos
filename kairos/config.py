@@ -39,7 +39,8 @@ DEFAULT_CONFIG = {
         "zep_api_key": None
     },
     "update": {
-        "last_check": 0
+        "last_check": 0,
+        "require_signature": True
     },
     "council": {
         "members": [],

@@ -18,6 +18,7 @@ from typing import Optional
 import httpx
 
 from kairos import safety
+from kairos import config
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +87,7 @@ def check_for_update(timeout: float = 10.0) -> dict:
     asset_url = None
     asset_digest = None
     asset_name = None
+    sig_url = None
     for a in data.get("assets", []):
         if str(a.get("name", "")).lower().endswith(".zip"):
             asset_url = a.get("browser_download_url")
@@ -93,6 +95,11 @@ def check_for_update(timeout: float = 10.0) -> dict:
             digest = a.get("digest") or ""
             if digest.startswith("sha256:"):
                 asset_digest = digest.split(":", 1)[1].strip().lower()
+            break
+    for a in data.get("assets", []):
+        nm = str(a.get("name", ""))
+        if asset_name and nm == asset_name + ".sig":
+            sig_url = a.get("browser_download_url")
             break
     if not asset_url:
         asset_url = data.get("zipball_url")
@@ -107,12 +114,14 @@ def check_for_update(timeout: float = 10.0) -> dict:
         "download_url": asset_url,
         "asset_name": asset_name,
         "asset_digest": asset_digest,
+        "signature_url": sig_url,
         "error": None,
     }
 
 
-def download_and_extract(url: str, dest: str, expected_sha256: str = None) -> Path:
-    """Download a ZIP, verify its sha256 (if provided), and safely extract it."""
+def download_and_extract(url: str, dest: str, expected_sha256: str = None,
+                         signature_url: str = None, require_signature: bool = None) -> Path:
+    """Download a ZIP, verify its sha256 AND Ed25519 signature, then extract."""
     dest_path = Path(dest)
     dest_path.mkdir(parents=True, exist_ok=True)
     zip_path = dest_path / "update.zip"
@@ -123,12 +132,33 @@ def download_and_extract(url: str, dest: str, expected_sha256: str = None) -> Pa
             for chunk in r.iter_bytes():
                 f.write(chunk)
 
+    data = zip_path.read_bytes()
+
     if expected_sha256:
         actual = safety.sha256_file(zip_path)
         if actual.lower() != expected_sha256.lower():
-            raise RuntimeError(
-                "Update integrity check failed (sha256 mismatch); aborting.")
+            raise RuntimeError("Update integrity check failed (sha256 mismatch); aborting.")
         logger.info("Update sha256 verified: %s", actual)
+
+    from kairos.release_signing import verify_bytes
+    if signature_url:
+        sig_resp = httpx.get(signature_url, headers={"User-Agent": "kairos-updater"},
+                             timeout=60.0, follow_redirects=True)
+        sig_resp.raise_for_status()
+        if not verify_bytes(data, sig_resp.content):
+            raise RuntimeError("Release signature verification FAILED; aborting update.")
+        logger.info("Release signature verified (Ed25519).")
+    else:
+        if require_signature is None:
+            try:
+                require_signature = bool(config.load_config().get("update", {}).get(
+                    "require_signature", True))
+            except Exception:
+                require_signature = True
+        if require_signature:
+            raise RuntimeError(
+                "No signature asset found for this release and update.require_signature "
+                "is enabled; aborting.")
 
     safety.safe_extract(zip_path, dest_path)
     return dest_path
