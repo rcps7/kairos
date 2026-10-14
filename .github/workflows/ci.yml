@@ -21,7 +21,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
-          pip install pydantic httpx keyring cryptography duckdb python-telegram-bot
+          pip install pydantic httpx keyring cryptography duckdb pandas python-telegram-bot
       - name: Byte-compile package
         run: python -m compileall -q kairos
       - name: Run hardening tests

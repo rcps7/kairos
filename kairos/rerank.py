@@ -19,14 +19,15 @@ def _tokens(text: str) -> set:
 
 def _cosine(a, b) -> float:
     try:
-        import numpy as np
-        va = np.asarray(a, dtype=float)
-        vb = np.asarray(b, dtype=float)
-        na = float(np.linalg.norm(va))
-        nb = float(np.linalg.norm(vb))
+        va = [float(x) for x in a]
+        vb = [float(x) for x in b]
+        if len(va) != len(vb):
+            return 0.0
+        na = sum(x * x for x in va) ** 0.5
+        nb = sum(x * x for x in vb) ** 0.5
         if na == 0.0 or nb == 0.0:
             return 0.0
-        return float(np.dot(va, vb) / (na * nb))
+        return sum(x * y for x, y in zip(va, vb)) / (na * nb)
     except Exception:
         return 0.0
 

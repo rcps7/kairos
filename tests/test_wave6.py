@@ -6,7 +6,11 @@ from kairos import rerank, computer
 
 
 def test_gui_split_reexports():
-    import kairos.gui.main_window as m
+    try:
+        import kairos.gui.main_window as m
+    except ImportError:
+        import pytest
+        pytest.skip("PySide6 not installed")
     for name in ("KairosGUI", "TelegramDialog", "CharacterDialog", "CollaborationWindow",
                  "AgentSettingsDialog", "LLMWorker", "MessageBubble"):
         assert hasattr(m, name), f"main_window missing {name}"
