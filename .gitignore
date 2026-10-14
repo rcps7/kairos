@@ -61,3 +61,4 @@ apply_update.bat
 # ---- Local extracted/installed copies ----
 kairos-master/
 KAIROS-agent-bundle.zip
+KAIROS-agent-bundle.zip.sig

@@ -1,6 +1,6 @@
 # KAIROS Roadmap
 
-Current version: **0.14.0** · License: MIT (PolyForm Noncommercial for the app) ·
+Current version: **0.14.1** · License: MIT (PolyForm Noncommercial for the app) ·
 Repo: https://github.com/rcps7/kairos
 
 This document tracks shipped functionality and the forward plan. Each release is
@@ -47,6 +47,7 @@ Verification gates for every release: `python -m compileall kairos`,
 | 0.13.0 | Plan B — Wave 5 | MCP **server**; browser actions; Google Drive connector; Telegram streaming; Agent Settings / Usage / Plans GUI. |
 | 0.13.1 | Release integrity | Ed25519-signed bundles verified by the updater against `kairos/release_pubkey.pem`. |
 | 0.14.0 | Plan B — Wave 6 | GUI split (`common`/`widgets`/`workers`/`dialogs`); browser computer-use loop; RAG reranking. |
+| 0.14.1 | CI fix | Pytest `pythonpath` config + CI test deps; removed stray BOM from `kairos/__init__.py`. |
 
 Plan A is **fully complete**; Plan B's wave backlog is **fully complete**.
 
