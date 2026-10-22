@@ -19,7 +19,8 @@ from kairos.council import Council
 from kairos.graph_memory import GraphMemory
 from kairos.pending_store import PendingStore
 from kairos import guardrails, memory_extract
-from kairos.tools import build_tool_protocol, format_tool_results, parse_tool_calls
+from kairos.tools import (build_tool_protocol, format_tool_results, parse_tool_calls,
+                          first_tool_marker, tool_marker_holdback)
 from kairos.email_client import EmailClient
 from kairos.gui.main_window import KairosGUI
 from kairos.learning import ErrorMemory, reflect
@@ -645,38 +646,7 @@ class KairosEngine:
             if agent_cfg.get("native_tools") and hasattr(self.llm, "generate_messages"):
                 return self._chat_native(user_content, progress=progress)
 
-            conversation = user_content
-            reply = ""
-            for round_index in range(MAX_TOOL_ROUNDS):
-                reply = self.ask_llm(conversation, with_tools=True)
-                clean, calls = parse_tool_calls(reply)
-                if not calls:
-                    return clean or reply
-
-                results = []
-                for call in calls:
-                    if progress:
-                        try:
-                            progress(f"Running tool: {call.name} "
-                                     f"{call.query or call.url}".strip())
-                        except Exception:
-                            pass
-                    results.append((call, guardrails.wrap_untrusted(
-                        call.name, self._run_tool(call))))
-
-                conversation = (
-                    f"{conversation}\n\nASSISTANT TOOL REQUEST:\n{reply}\n\n"
-                    f"{format_tool_results(results)}\n\n"
-                    "Now answer the user's original question using the tool "
-                    "results above. Do not emit more tool tags unless essential."
-                )
-
-            # Rounds exhausted: return whatever prose we have.
-            clean, _ = parse_tool_calls(reply)
-            if clean:
-                return clean
-            return ("I gathered some information but could not finish the answer. "
-                    "Please refine your request or try again.")
+            return self._tool_loop(user_content, progress=progress)
         except Exception as e:
             self.record_error("chat", e)
             try:
@@ -689,8 +659,47 @@ class KairosEngine:
             if cfg.get("use_in_chat", True) or cfg.get("use_in_tools", True):
                 self.spawn_graph_extract(prompt, source="chat", kind="chat")
 
+    def _tool_loop(self, conversation: str, progress=None) -> str:
+        """Run the provider-agnostic tool loop and return the final answer text."""
+        reply = ""
+        for _ in range(MAX_TOOL_ROUNDS):
+            reply = self.ask_llm(conversation, with_tools=True)
+            clean, calls = parse_tool_calls(reply)
+            if not calls:
+                return clean or reply
+
+            results = []
+            for call in calls:
+                if progress:
+                    try:
+                        progress(f"Running tool: {call.name} "
+                                 f"{call.query or call.url}".strip())
+                    except Exception:
+                        pass
+                results.append((call, guardrails.wrap_untrusted(
+                    call.name, self._run_tool(call))))
+
+            conversation = (
+                f"{conversation}\n\nASSISTANT TOOL REQUEST:\n{reply}\n\n"
+                f"{format_tool_results(results)}\n\n"
+                "Now answer the user's original question using the tool "
+                "results above. Do not emit more tool tags unless essential."
+            )
+
+        # Rounds exhausted: return whatever prose we have.
+        clean, _ = parse_tool_calls(reply)
+        if clean:
+            return clean
+        return ("I gathered some information but could not finish the answer. "
+                "Please refine your request or try again.")
+
     def stream_chat(self, prompt: str, attachment_paths=None):
-        """Yield response text as it streams from the provider (falls back on error)."""
+        """Yield response text, executing tool requests instead of leaking them.
+
+        Streams the model's prose, but if it emits a tool request (search/learn/
+        scrape) the request is run and its prose is replaced by the final answer,
+        so raw tool markup is never shown to the user. Falls back on error.
+        """
         try:
             context, images = ("", [])
             if attachment_paths:
@@ -705,13 +714,46 @@ class KairosEngine:
                 if vis:
                     yield self.generate_with_images(user_content, images, provider_id=vis[0])
                     return
+
+            system = self.current_system_prompt(with_tools=True)
+            buf = []
+            emitted = 0
+            tool_mode = False
             got = False
-            system = self.current_system_prompt()
             for piece in self.llm.stream_text(user_content, system_prompt=system):
                 got = True
-                yield piece
+                buf.append(piece)
+                if tool_mode:
+                    continue
+                text = "".join(buf)
+                cut = first_tool_marker(text)
+                if cut is not None:
+                    # The model asked for a tool: stop streaming, keep the prose.
+                    tool_mode = True
+                    safe = text[:cut]
+                    if len(safe) > emitted:
+                        yield safe[emitted:]
+                        emitted = len(safe)
+                    continue
+                safe_len = len(text) - tool_marker_holdback(text)
+                if safe_len > emitted:
+                    yield text[emitted:safe_len]
+                    emitted = safe_len
+
+            text = "".join(buf)
+            if tool_mode:
+                clean, calls = parse_tool_calls(text)
+                if calls:
+                    yield self._tool_loop(f"{user_content}\n\n{text}")
+                    return
+                if len(text) > emitted:
+                    yield text[emitted:]  # marker was a false positive
+                return
+
             if not got:
                 yield self.ask_llm(user_content)
+            elif len(text) > emitted:
+                yield text[emitted:]
             self._record_usage("chat.stream")
         except Exception as e:
             self.record_error("chat.stream", e)

@@ -539,6 +539,8 @@ data connectors, text-to-SQL, image generation and a container skill sandbox.
   (`kairos/rerank.py`; config `rag.rerank`, `rag.top_k`).
 - **Signed releases** — Ed25519-signed bundles verified by the updater against a
   pinned public key (`kairos/release_signing.py`).
+- **Streaming executes tools** — streamed replies run web tool requests (search /
+  learn / scrape) and show the answer, never the raw tool markup.
 
 ---
 

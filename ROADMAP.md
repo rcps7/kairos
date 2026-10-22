@@ -1,6 +1,6 @@
 # KAIROS Roadmap
 
-Current version: **0.14.1** · License: MIT (PolyForm Noncommercial for the app) ·
+Current version: **0.14.2** · License: MIT (PolyForm Noncommercial for the app) ·
 Repo: https://github.com/rcps7/kairos
 
 This document tracks shipped functionality and the forward plan. Each release is
@@ -48,6 +48,7 @@ Verification gates for every release: `python -m compileall kairos`,
 | 0.13.1 | Release integrity | Ed25519-signed bundles verified by the updater against `kairos/release_pubkey.pem`. |
 | 0.14.0 | Plan B — Wave 6 | GUI split (`common`/`widgets`/`workers`/`dialogs`); browser computer-use loop; RAG reranking. |
 | 0.14.1 | CI fix | Pytest `pythonpath` + CI test deps; dropped stray BOM in `kairos/__init__.py`; numpy-free rerank cosine; GUI check/test skip when PySide6 absent. |
+| 0.14.2 | Streaming tools | Streamed replies now execute tool requests (search/learn/scrape) instead of printing raw tool markup; parser also accepts `web_search("...")` form. |
 
 Plan A is **fully complete**; Plan B's wave backlog is **fully complete**.
 
@@ -124,7 +125,7 @@ Features that are shipped but need local setup; all are **off by default**:
 
 - `tests/` — security & config secrets, skills sandbox, planner, tools, guardrails,
   usage, SQL, MCP (client + server), connectors, image, Discord, sub-agents,
-  signing, GUI split, computer-use, RAG rerank.
+  signing, GUI split, computer-use, RAG rerank, streaming tool loop.
 - `python -m kairos.evaluation` — 12 offline smoke checks.
 - CI: `.github/workflows/ci.yml` (Ubuntu + Windows; Python 3.10/3.12; compile + tests).
 

@@ -93,6 +93,11 @@ _RE_SCRAPE = re.compile(
 )
 _RE_GENERIC = re.compile(r"<tool\s+name=[\"']([A-Za-z_]+)[\"'][^>]*>(.*?)</tool>", re.I | re.S)
 _RE_JSON = re.compile(r"\{[^{}]*\}", re.S)
+_RE_FUNC = re.compile(
+    r"\b(web_search|websearch|learn_web|learn|scrape|fetch|search)\s*"
+    r"\(\s*[\"']?([^\"'()]*?)[\"']?\s*\)",
+    re.I,
+)
 _RE_JSON_KEY = re.compile(r"[\"'](?:tool|action|name)[\"']\s*:", re.I)
 _RE_INNER = re.compile(r"<(query|url)>\s*(.*?)\s*</\1>", re.I | re.S)
 
@@ -152,6 +157,13 @@ def parse_tool_calls(text: str):
             calls.append(call)
             spans.append(m.span())
 
+    # Function-call style: web_search("cats") / learn_web("https://...")
+    for m in _RE_FUNC.finditer(text):
+        call = _call_from_name(m.group(1), m.group(2))
+        if call and (call.query or call.url):
+            calls.append(call)
+            spans.append(m.span())
+
     clean = _remove_spans(text, spans)
     clean = strip_tool_markup(clean)
     return clean, calls[:MAX_TOOL_CALLS_PER_TURN]
@@ -177,6 +189,41 @@ def _remove_spans(text: str, spans):
         last = end
     out.append(text[last:])
     return "".join(out)
+
+
+# Literal sequences that indicate the model has begun emitting a tool request.
+# Used by the streaming path to avoid showing raw tool markup to the user.
+_TOOL_MARKERS = (
+    "<web_search", "<learn_web", "<scrape", "<tool",
+    '{"tool"', '{"action"', '{"name"',
+    "web_search(", "learn_web(", "scrape(",
+)
+
+
+def first_tool_marker(text: str):
+    """Return the index where a tool request marker starts, else ``None``."""
+    if not text:
+        return None
+    found = None
+    for m in _TOOL_MARKERS:
+        i = text.find(m)
+        if i != -1 and (found is None or i < found):
+            found = i
+    return found
+
+
+def tool_marker_holdback(text: str) -> int:
+    """Count trailing chars that may be the beginning of a tool marker.
+
+    Lets the streaming path emit text eagerly while withholding a possible
+    partial marker (e.g. a trailing ``"<"`` or ``"{"``) until it is resolved.
+    """
+    hold = 0
+    for m in _TOOL_MARKERS:
+        for k in range(1, min(len(m), len(text)) + 1):
+            if text.endswith(m[:k]) and k > hold:
+                hold = k
+    return hold
 
 
 def strip_tool_markup(text: str) -> str:
