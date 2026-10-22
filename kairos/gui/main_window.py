@@ -21,6 +21,7 @@ except Exception:
 
 from kairos.gui.voice_widgets import VoiceWorker, SpeakWorker, VoiceMeter, MoodIndicator
 from kairos.characters_presets import ALL_CAPABILITIES, CAPABILITY_LABELS
+from kairos.jobs import Job, JobQueue
 from kairos import updater
 
 # ---------------------------------------------------------------------------
@@ -57,12 +58,22 @@ class KairosGUI(QMainWindow):
     sig_collab_llm_task = Signal(object, object)
     sig_collab_video = Signal(bytes)
 
+    # FIFO job-queue events (emitted from worker threads, delivered on the GUI thread)
+    sig_job_start = Signal(str)
+    sig_job_chunk = Signal(str, str)
+    sig_job_progress = Signal(str, str)
+    sig_job_done = Signal(str, object)
+    sig_job_error = Signal(str, str)
+
     def __init__(self, engine):
         super().__init__()
         self.engine = engine
         self._deep_timer = None
         self._thinking_elapsed = 0
         self.collab_windows = {}
+        self.jobs = JobQueue()
+        self._job_meta = {}
+        self._job_seq = 0
         try:
             self._invoker = _MainThreadInvoker()
             engine.main_thread_caller = self._invoker
@@ -95,6 +106,11 @@ class KairosGUI(QMainWindow):
         self.engine.on_collab_video = lambda s, d: self.sig_collab_video.emit(d)
         self.sig_collab_llm_task.connect(self._on_collab_llm_task)
         self.sig_collab_video.connect(self._on_collab_video)
+        self.sig_job_start.connect(self._on_job_start)
+        self.sig_job_chunk.connect(self._on_job_chunk)
+        self.sig_job_progress.connect(self._on_job_progress)
+        self.sig_job_done.connect(self._on_job_done)
+        self.sig_job_error.connect(self._on_job_error)
 
     def _on_collab_incoming(self, req):
         dlg = IncomingRequestDialog(req, self)
@@ -656,14 +672,18 @@ class KairosGUI(QMainWindow):
             QMessageBox.warning(self, "Kairos", f"Delete failed: {e}")
 
     def _run_skill_button(self, name):
-        self._append_bubble("Running skill", name, "system", GREEN)
-        # Run on the main thread: skills may open Qt dialogs, which must
-        # never be created from a background thread.
-        try:
-            result = self.engine.run_skill(name)
-            self._append_bubble(f"Skill {name}", str(result), "kairos", GREEN)
-        except Exception as e:
-            self._append_bubble(f"Skill {name} error", str(e), "system", RED)
+        # Runs on a worker thread through the FIFO queue so the UI stays live;
+        # skills that need Qt dialogs are marshalled to the main thread by
+        # engine.run_skill (the `uses_ui` contract).
+        def run(emit_chunk, emit_progress):
+            emit_progress(f"Running skill: {name}")
+            return self.engine.run_skill(name)
+
+        self._submit_job(
+            run, f"Skill {name}",
+            on_done=lambda j, r: self._append_bubble(f"Skill {name}", str(r), "kairos", GREEN),
+            on_error=lambda j, e: self._append_bubble(f"Skill {name} error", e, "system", RED),
+            kind="skill")
 
     def _build_chat_panel(self):
         panel = QWidget()
@@ -679,9 +699,13 @@ class KairosGUI(QMainWindow):
         self.character_label.setStyleSheet(f"color: {GREEN}; font-family: 'Segoe UI', sans-serif;")
         self.pending_label = QLabel("")
         self.pending_label.setStyleSheet(f"color: {GREEN_DIM}; font-weight: bold; font-family: 'Segoe UI', sans-serif;")
+        self.queue_label = QLabel("")
+        self.queue_label.setStyleSheet(f"color: {TEXT_GREY}; font-family: 'Segoe UI', sans-serif;")
         self.mood = MoodIndicator()
         header.addWidget(title)
         header.addStretch()
+        header.addWidget(self.queue_label)
+        header.addSpacing(12)
         header.addWidget(self.pending_label)
         header.addSpacing(12)
         header.addWidget(self.character_label)
@@ -1015,19 +1039,11 @@ class KairosGUI(QMainWindow):
     # Background task runner
     # ------------------------------------------------------------------
     def _run_bg(self, fn, task_name, raw_html=False):
-        class Task(QThread):
-            finished = Signal(str)
-
-            def run(self):
-                try:
-                    self.finished.emit(str(fn()))
-                except Exception as e:
-                    self.finished.emit(f"[Error] {e}")
-
-        worker = Task()
-        worker.finished.connect(lambda r: self._append_result(task_name, r, raw_html))
-        worker.start()
-        self._worker = worker
+        self._submit_job(
+            lambda c, p: str(fn()), task_name,
+            on_done=lambda j, r: self._append_result(task_name, r, raw_html),
+            on_error=lambda j, e: self._append_result(task_name, f"[Error] {e}", raw_html),
+            kind="task")
 
     def _append_result(self, task_name, result, raw_html=False):
         self._append_bubble(f"{task_name}", result, "system", GREEN, raw_html=raw_html)
@@ -1058,6 +1074,115 @@ class KairosGUI(QMainWindow):
         self.chat_input.setText(text)
         self.chat_input.setFocus()
 
+    # ------------------------------------------------------------------
+    # FIFO job queue helpers
+    # ------------------------------------------------------------------
+    def _next_job_id(self):
+        self._job_seq += 1
+        return f"ui-{self._job_seq}"
+
+    def _job_callbacks(self):
+        return dict(
+            on_start=lambda jid: self.sig_job_start.emit(jid),
+            on_chunk=lambda jid, t: self.sig_job_chunk.emit(jid, t),
+            on_progress=lambda jid, t: self.sig_job_progress.emit(jid, t),
+            on_done=lambda jid, r: self.sig_job_done.emit(jid, r),
+            on_error=lambda jid, e: self.sig_job_error.emit(jid, str(e)),
+        )
+
+    def _submit_job(self, runner, label, pending=None, on_done=None, on_error=None,
+                    kind="task", **meta):
+        """Queue a job; returns its id. Jobs run strictly one at a time (FIFO)."""
+        jid = self._next_job_id()
+        bubble = None
+        if pending:
+            is_chat = kind == "chat"
+            bubble = self._append_bubble(label, pending,
+                                         "kairos" if is_chat else "system",
+                                         GREEN if is_chat else TEXT_GREY)
+        entry = {"bubble": bubble, "buf": "", "on_done": on_done, "on_error": on_error,
+                 "label": label, "kind": kind}
+        entry.update(meta)
+        self._job_meta[jid] = entry
+        self.jobs.submit(Job(run=runner, label=label, id=jid, **self._job_callbacks()))
+        self._update_queue_label()
+        return jid
+
+    def _update_queue_label(self):
+        try:
+            n = self.jobs.pending()
+        except Exception:
+            n = 0
+        label = getattr(self, "queue_label", None)
+        if label is not None:
+            label.setText(f"Queue: {n}" if n > 1 else "")
+
+    def _on_job_start(self, jid):
+        self._set_mood("thinking")
+        self._start_deep_thinking_timer()
+        self._update_queue_label()
+
+    def _on_job_chunk(self, jid, text):
+        entry = self._job_meta.get(jid)
+        if not entry:
+            return
+        entry["buf"] += text
+        if entry["bubble"]:
+            entry["bubble"].set_text(entry["buf"])
+
+    def _on_job_progress(self, jid, text):
+        self._append_bubble("Kairos", text, "system", TEXT_GREY)
+
+    def _on_job_done(self, jid, result):
+        entry = self._job_meta.pop(jid, None)
+        if entry and entry.get("on_done"):
+            entry["on_done"](jid, result)
+        elif entry and entry["bubble"]:
+            entry["bubble"].set_text(str(result))
+        else:
+            self._append_bubble("Kairos", str(result), "kairos", GREEN)
+        if entry and entry.get("kind") == "chat" and entry.get("voice"):
+            self._voice_reply = False
+            self.speak_reply(str(result))
+        self._job_finished(jid)
+
+    def _on_job_error(self, jid, err):
+        entry = self._job_meta.pop(jid, None)
+        msg = err if err.startswith("[Error]") else f"[Error] {err}"
+        if entry and entry.get("on_error"):
+            entry["on_error"](jid, msg)
+        elif entry and entry["bubble"]:
+            entry["bubble"].set_text(msg)
+        else:
+            self._append_bubble("Kairos", msg, "system", RED)
+        self._job_finished(jid)
+
+    def _job_finished(self, jid):
+        self._update_queue_label()
+        try:
+            busy = self.jobs.is_busy()
+        except Exception:
+            busy = False
+        if not busy:
+            self._stop_deep_thinking_timer()
+            self._set_mood("success")
+            QTimer.singleShot(2500, self._reset_mood)
+
+    def _chat_runner(self, text, attachments):
+        """Build the worker callable for a chat turn (runs off the GUI thread)."""
+        def run(emit_chunk, emit_progress):
+            cfg = self.engine.config.get("agent", {}) or {}
+            if cfg.get("streaming", True) and hasattr(self.engine, "stream_chat"):
+                parts = []
+                for piece in self.engine.stream_chat(text or "",
+                                                     attachment_paths=attachments):
+                    parts.append(piece)
+                    emit_chunk(piece)
+                return "".join(parts)
+            return self.engine.chat(text or "", attachment_paths=attachments,
+                                    progress=lambda t: emit_progress(t))
+        return run
+
     def send_message(self):
         text = self.chat_input.text().strip()
         if not text and not self.attachments:
@@ -1072,17 +1197,9 @@ class KairosGUI(QMainWindow):
             self.attachments = []
             self._update_attachment_label()
         self.chat_input.clear()
-        self._pending_kairos_bubble = self._append_bubble("Kairos", "...", "kairos", GREEN)
-        self._stream_buf = ""
-        self._set_mood("thinking")
-        self._start_deep_thinking_timer()
-        self.worker = LLMWorker(self.engine, text, attachments=attachments)
-        self.worker.finished.connect(self.on_llm_reply)
-        self.worker.chunk.connect(self._on_llm_chunk)
-        self.worker.progress.connect(
-            lambda t: self._append_bubble("Kairos", t, "system", TEXT_GREY)
-        )
-        self.worker.start()
+        self._submit_job(self._chat_runner(text, attachments), "Kairos",
+                         pending="...", kind="chat",
+                         voice=getattr(self, "_voice_reply", False))
 
     def _send_council(self, text):
         members = [c.currentData() or c.currentText() for c in self.member_combos if (c.currentData() or c.currentText())]
@@ -1099,32 +1216,29 @@ class KairosGUI(QMainWindow):
         self._append_bubble("You", text, "user", "#58a6ff")
         if self.attachments:
             self._append_bubble("Attachments", "\n".join(str(a) for a in self.attachments), "system", GREEN)
+        attachments = list(self.attachments)
+        self.attachments = []
+        self._update_attachment_label()
         self.chat_input.clear()
-        self._set_mood("thinking")
-        self._start_deep_thinking_timer()
         self._append_bubble("Council", f"Members: {', '.join(members)}", "system", GREEN)
-        self.council_worker = CouncilWorker(self.engine, text, members, list(self.attachments), "standard")
-        self.council_worker.progress.connect(lambda t: self._append_bubble("Council", t, "system", TEXT_GREY))
-        self.council_worker.finished.connect(self._on_council_done)
-        self.council_worker.failed.connect(self._on_council_failed)
-        self.council_worker.start()
 
-    def _on_council_done(self, result: dict):
-        self._stop_deep_thinking_timer()
-        self._set_mood("success")
+        def run(emit_chunk, emit_progress):
+            return self.engine.council(text, members=members,
+                                       attachment_paths=attachments, mode="standard",
+                                       progress=lambda t: emit_progress(t))
+
+        self._submit_job(run, "Council", on_done=self._on_council_done,
+                         on_error=self._on_council_failed, kind="council")
+
+    def _on_council_done(self, jid, result):
+        result = result or {}
         final = result.get("final", "")
         primary = result.get("primary", "?")
         self._append_bubble("Kairos", f"[Council — primary: {primary}]\n\n{final}", "kairos", GREEN)
         OutputDialog("Kairos Council Result", final, self).exec()
-        self.attachments = []
-        self._update_attachment_label()
-        QTimer.singleShot(2500, self._reset_mood)
 
-    def _on_council_failed(self, msg: str):
-        self._stop_deep_thinking_timer()
-        self._set_mood("error")
+    def _on_council_failed(self, jid, msg):
         self._append_bubble("Council error", msg, "system", RED)
-        QTimer.singleShot(2500, self._reset_mood)
 
     def _on_llm_chunk(self, text):
         if not text:
@@ -1347,12 +1461,8 @@ class KairosGUI(QMainWindow):
         self._last_pending = n
 
     def run_reflection(self):
-        self._pending_kairos_bubble = self._append_bubble("Kairos", "Reflecting on recent errors ...", "kairos", GREEN)
-        self._set_mood("thinking")
-        self._start_deep_thinking_timer()
-        self.worker = LLMWorker(self.engine, None, task="reflect")
-        self.worker.finished.connect(self.on_llm_reply)
-        self.worker.start()
+        self._submit_job(lambda c, p: self.engine.reflect(), "Kairos",
+                         pending="Reflecting on recent errors ...", kind="chat")
 
     def show_lessons(self):
         lessons = self.engine.recent_lessons(5)

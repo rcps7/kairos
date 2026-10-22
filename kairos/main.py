@@ -107,7 +107,9 @@ class KairosEngine:
         self._heartbeat_thread = None
         self._stop_event = threading.Event()
         self._heartbeat_stop = threading.Event()
-        self._in_chat = False
+        self._in_chat = False  # legacy flag (diagnostics only)
+        self._chat_local = threading.local()  # per-thread re-entrancy guard
+        self._llm_gate = threading.RLock()  # serialise provider calls process-wide
         self._extract_busy = threading.Event()
         self.main_thread_caller = None  # set by the GUI for UI-opening skills
         self._write_pid()
@@ -169,12 +171,13 @@ class KairosEngine:
                 system_prompt = self.current_system_prompt(
                     system_prompt, with_tools=with_tools
                 )
-            result = (
-                self.llm.generate(prompt, system_prompt=system_prompt, provider_id=provider_id)
-                if system_prompt else self.llm.generate(prompt, provider_id=provider_id)
-            )
-            self._record_usage("chat")
-            return result
+            with self._llm_gate:
+                result = (
+                    self.llm.generate(prompt, system_prompt=system_prompt, provider_id=provider_id)
+                    if system_prompt else self.llm.generate(prompt, provider_id=provider_id)
+                )
+                self._record_usage("chat")
+                return result
         except Exception as e:
             self.record_error("llm.generate", e)
             raise
@@ -256,9 +259,10 @@ class KairosEngine:
             system_prompt = self.current_system_prompt(system_prompt)
         if not system_prompt:
             system_prompt = "You are a helpful assistant."
-        return self.llm.generate_with_images(
-            prompt, image_paths, system_prompt=system_prompt, provider_id=provider_id
-        )
+        with self._llm_gate:
+            return self.llm.generate_with_images(
+                prompt, image_paths, system_prompt=system_prompt, provider_id=provider_id
+            )
 
     # ---- Agent Characters ----
     def current_system_prompt(self, extra: str = None, with_tools: bool = False) -> str:
@@ -618,9 +622,11 @@ class KairosEngine:
         documented tool protocol; those are executed here and their results fed
         back for a final answer. Only web tools are exposed to the model.
         """
-        if getattr(self, "_in_chat", False):
-            # Re-entrancy guard: tool execution must not start another chat loop.
+        if getattr(self._chat_local, "active", False):
+            # Re-entrancy guard is per-thread: tool execution on this thread must
+            # not start a nested chat loop, but *other* threads run independently.
             return self.ask_llm(prompt)
+        self._chat_local.active = True
         self._in_chat = True
         try:
             context, images = ("", [])
@@ -654,6 +660,7 @@ class KairosEngine:
             except Exception:
                 raise
         finally:
+            self._chat_local.active = False
             self._in_chat = False
             cfg = self._graph_cfg()
             if cfg.get("use_in_chat", True) or cfg.get("use_in_tools", True):
@@ -771,8 +778,9 @@ class KairosEngine:
                     {"role": "user", "content": user_content}]
         reply = ""
         for _ in range(MAX_TOOL_ROUNDS):
-            msg = self.llm.generate_messages(messages, tools=tools)
-            self._record_usage("chat.tools")
+            with self._llm_gate:
+                msg = self.llm.generate_messages(messages, tools=tools)
+                self._record_usage("chat.tools")
             calls = msg.get("tool_calls") or []
             reply = msg.get("content") or reply
             if not calls:

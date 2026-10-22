@@ -542,6 +542,14 @@ data connectors, text-to-SQL, image generation and a container skill sandbox.
 - **Streaming executes tools** — streamed replies run web tool requests (search /
   learn / scrape) and show the answer, never the raw tool markup.
 
+### Wave 7 (concurrency)
+- **FIFO job queue** — chat turns, skills and background actions are queued and
+  run one at a time, so the window stays responsive and you can keep submitting
+  work while a job is running (`kairos/jobs.py`).
+- **Independent jobs** — the chat re-entrancy guard is per-thread, so Telegram and
+  scheduled/background jobs keep full tool + recall access; skills run off the UI
+  thread; token usage is tracked per call.
+
 ---
 
 ## Knowledge Library & Media Storage

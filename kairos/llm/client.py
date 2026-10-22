@@ -1,6 +1,7 @@
 import base64
 import json
 import mimetypes
+import threading
 
 import httpx
 
@@ -13,7 +14,13 @@ class LLMClient:
         self.providers = cfg.get("llm_providers", {})
         self.active_provider = cfg.get("active_llm", "moonshot")
         self.client = httpx.Client(timeout=180.0)
-        self.last_usage = None
+        # Usage is kept per-thread so concurrent calls cannot clobber each
+        # other's accounting.
+        self._usage_local = threading.local()
+
+    @property
+    def last_usage(self):
+        return getattr(self._usage_local, "last_usage", None)
 
     def get_active(self) -> dict:
         return self.providers.get(self.active_provider, {})
@@ -84,19 +91,19 @@ class LLMClient:
             raise RuntimeError(f"LLM error {resp.status_code} ({pid}): {resp.text[:500]}")
         data = resp.json()
         content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-        self.last_usage = None
+        self._usage_local.last_usage = None
         try:
             u = data.get("usage") or {}
             pt = int(u.get("prompt_tokens") or 0)
             ct = int(u.get("completion_tokens") or 0)
-            self.last_usage = {
+            self._usage_local.last_usage = {
                 "provider": pid,
                 "model": p.get("model"),
                 "prompt_tokens": pt or max(1, (len(user_prompt) + len(system_prompt)) // 4),
                 "completion_tokens": ct or max(1, len(content or "") // 4),
             }
         except Exception:
-            self.last_usage = None
+            self._usage_local.last_usage = None
         return content
 
     def generate_with_images(self, user_prompt: str, image_paths, system_prompt: str = "You are a helpful assistant.", provider_id: str = None) -> str:
@@ -154,16 +161,16 @@ class LLMClient:
         if resp.status_code >= 400:
             raise RuntimeError(f"LLM error {resp.status_code} ({pid}): {resp.text[:500]}")
         data = resp.json()
-        self.last_usage = None
+        self._usage_local.last_usage = None
         try:
             u = data.get("usage") or {}
-            self.last_usage = {
+            self._usage_local.last_usage = {
                 "provider": pid, "model": p.get("model"),
                 "prompt_tokens": int(u.get("prompt_tokens") or 0) or 1,
                 "completion_tokens": int(u.get("completion_tokens") or 0) or 1,
             }
         except Exception:
-            self.last_usage = None
+            self._usage_local.last_usage = None
         return data.get("choices", [{}])[0].get("message", {}) or {}
 
     def stream_text(self, user_prompt: str, system_prompt: str = "You are a helpful assistant.",
@@ -184,7 +191,7 @@ class LLMClient:
             ],
             "stream": True,
         }
-        self.last_usage = None
+        self._usage_local.last_usage = None
         with self.client.stream("POST", p["api_url"], headers=headers, json=payload) as r:
             if r.status_code >= 400:
                 r.read()
@@ -201,7 +208,7 @@ class LLMClient:
                     continue
                 u = obj.get("usage")
                 if u:
-                    self.last_usage = {
+                    self._usage_local.last_usage = {
                         "provider": pid, "model": p.get("model"),
                         "prompt_tokens": int(u.get("prompt_tokens") or 0) or 1,
                         "completion_tokens": int(u.get("completion_tokens") or 0) or 1,
