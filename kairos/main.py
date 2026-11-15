@@ -1169,6 +1169,48 @@ class KairosEngine:
     def list_providers(self) -> list:
         return self.llm.list_providers()
 
+    # ---- Provider / model selection ----
+    def set_provider(self, provider_id: str) -> bool:
+        ok = self.llm.set_active(provider_id)
+        if ok:
+            self.config = load_config()
+        return ok
+
+    def set_provider_model(self, provider_id: str, model: str) -> bool:
+        if not provider_id or not (model or "").strip():
+            return False
+        cfg = load_config()
+        prov = cfg.setdefault("llm_providers", {}).setdefault(provider_id, {})
+        prov["model"] = model.strip()
+        save_config(cfg)
+        self.reload_llm()
+        self.config = load_config()
+        return True
+
+    def cached_models(self, provider_id: str = None) -> list:
+        pid = provider_id or self.llm.active_provider
+        cache = (self.config.get("llm_models_cache") or {}).get(pid) or {}
+        models = list(cache.get("models") or [])
+        if not models:
+            models = fallback_models(pid, self.llm.providers.get(pid, {}))
+        return models
+
+    def refresh_models(self, provider_id: str = None) -> dict:
+        """Fetch the provider's live model list and cache it."""
+        pid = provider_id or self.llm.active_provider
+        try:
+            models = self.llm.list_models(pid)
+        except Exception as e:
+            self.record_error("llm.models", e)
+            return {"ok": False, "provider": pid, "error": str(e),
+                    "models": self.cached_models(pid)}
+        cfg = load_config()
+        cfg.setdefault("llm_models_cache", {})[pid] = {
+            "fetched_at": time.time(), "models": models}
+        save_config(cfg)
+        self.config = load_config()
+        return {"ok": True, "provider": pid, "models": models}
+
     # ---- Web ----
     def search_web(self, query: str, max_results: int = 10) -> list:
         self.require("web_search")
@@ -1697,6 +1739,35 @@ LLM_PRESETS = [
         "model": "llama-3.3-70b-versatile",
     },
 ]
+
+# Curated fallback models used when a provider's /models endpoint is not
+# reachable (offline, key missing, or a provider that does not implement it).
+_FALLBACK_MODELS = {
+    "moonshot": ["kimi-k3", "kimi-k2-0905-preview", "kimi-k2-turbo-preview",
+                 "moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k"],
+    "deepseek": ["deepseek-chat", "deepseek-reasoner"],
+    "openai": ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini", "o3-mini",
+               "o1-mini"],
+    "openrouter": ["openrouter/auto"],
+    "groq": ["llama-3.3-70b-versatile", "llama-3.1-8b-instant",
+             "mixtral-8x7b-32768", "gemma2-9b-it"],
+}
+
+
+def fallback_models(provider_id: str, provider: dict = None) -> list:
+    """A sensible default model list for a provider (when /models is unavailable)."""
+    provider = provider or {}
+    models = list(_FALLBACK_MODELS.get(provider_id, []))
+    url = (provider.get("api_url") or "").lower()
+    for preset in LLM_PRESETS:
+        if preset["api_url"].lower() in url or url in preset["api_url"].lower():
+            for m in _FALLBACK_MODELS.get(preset["id"], []):
+                if m not in models:
+                    models.append(m)
+    cur = provider.get("model")
+    if cur and cur not in models:
+        models.insert(0, cur)
+    return models
 
 
 class SetupDialog(QDialog):

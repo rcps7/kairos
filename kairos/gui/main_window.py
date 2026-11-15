@@ -341,6 +341,8 @@ class KairosGUI(QMainWindow):
 
         # Check for updates (at most once per day).
         QTimer.singleShot(1500, self.maybe_auto_check_updates)
+        # Refresh the provider's model list in the background (best effort).
+        QTimer.singleShot(3500, self.auto_refresh_models)
 
     # ------------------------------------------------------------------
     # Menu bar
@@ -692,6 +694,7 @@ class KairosGUI(QMainWindow):
             kind="skill")
 
     def _build_chat_panel(self):
+        self._mode = "chat"
         panel = QWidget()
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(10, 10, 10, 10)
@@ -774,7 +777,7 @@ class KairosGUI(QMainWindow):
         self.mode_combo.addItem("Execute", "execute")
         self.mode_combo.setToolTip("Plan: produce a durable plan only. "
                                    "Execute: plan, then autonomously run the steps.")
-        self.mode_combo.currentIndexChanged.connect(self._select_agent_mode)
+        self.mode_combo.activated.connect(self._on_mode_activated)
         mode_row.addWidget(self.mode_combo)
         self.mode_hint = QLabel("")
         self.mode_hint.setStyleSheet(f"color: {GREEN_DIM}; font-family: 'Segoe UI', sans-serif;")
@@ -807,6 +810,31 @@ class KairosGUI(QMainWindow):
         input_row.addWidget(self.clear_btn)
         layout.addLayout(input_row)
 
+        # --- Provider & model selector (below the chat box) ---
+        model_row = QHBoxLayout()
+        m_lbl = QLabel("Model:")
+        m_lbl.setStyleSheet(f"color: {TEXT_GREY}; font-family: 'Segoe UI', sans-serif;")
+        model_row.addWidget(m_lbl)
+        self.provider_combo = QComboBox()
+        self.provider_combo.setToolTip("Active LLM provider")
+        self.provider_combo.currentIndexChanged.connect(self._on_provider_selected)
+        model_row.addWidget(self.provider_combo)
+        self.model_combo = QComboBox()
+        self.model_combo.setEditable(True)
+        self.model_combo.setMinimumWidth(240)
+        self.model_combo.setToolTip("Model for the active provider (editable)")
+        self.model_combo.activated.connect(self._on_model_activated)
+        if self.model_combo.lineEdit():
+            self.model_combo.lineEdit().editingFinished.connect(self._on_model_edited)
+        model_row.addWidget(self.model_combo, 1)
+        self.refresh_models_btn = QPushButton("Refresh models")
+        self.refresh_models_btn.setToolTip("Fetch the latest model list from the provider")
+        self.refresh_models_btn.clicked.connect(self.refresh_models_clicked)
+        model_row.addWidget(self.refresh_models_btn)
+        model_row.addStretch()
+        layout.addLayout(model_row)
+        self.reload_provider_model_controls()
+
         return panel
 
     def _toggle_council_controls(self, checked):
@@ -815,24 +843,31 @@ class KairosGUI(QMainWindow):
             combo.setEnabled(checked)
 
     # --- Mode selection (Chat button + Plan/Execute dropdown) ---
+    def _apply_mode(self, mode, persist=True):
+        mode = mode if mode in ("chat", "plan", "execute") else "chat"
+        self._mode = mode
+        self.chat_mode_btn.setChecked(mode == "chat")
+        if mode in ("plan", "execute"):
+            idx = self.mode_combo.findData(mode)
+            if idx >= 0:
+                self.mode_combo.blockSignals(True)
+                self.mode_combo.setCurrentIndex(idx)
+                self.mode_combo.blockSignals(False)
+        # The dropdown is always selectable; the Chat button only reflects state.
+        self.mode_combo.setEnabled(True)
+        self._set_mode_hint(mode)
+        if persist:
+            try:
+                self.engine.set_mode(mode)
+            except Exception:
+                pass
+
     def _sync_mode_from_config(self):
         try:
             mode = self.engine.get_mode()
         except Exception:
             mode = "chat"
-        self.mode_combo.blockSignals(True)
-        if mode in ("plan", "execute"):
-            idx = self.mode_combo.findData(mode)
-            if idx >= 0:
-                self.mode_combo.setCurrentIndex(idx)
-            self.chat_mode_btn.setChecked(False)
-            self.mode_combo.setEnabled(True)
-        else:
-            mode = "chat"
-            self.chat_mode_btn.setChecked(True)
-            self.mode_combo.setEnabled(False)
-        self.mode_combo.blockSignals(False)
-        self._set_mode_hint(mode)
+        self._apply_mode(mode, persist=False)
 
     def _set_mode_hint(self, mode):
         labels = {"chat": "Chat", "plan": "Plan mode", "execute": "Execute mode"}
@@ -841,29 +876,119 @@ class KairosGUI(QMainWindow):
         except Exception:
             pass
 
-    def _select_chat_mode(self):
-        self.chat_mode_btn.setChecked(True)
-        self.mode_combo.setEnabled(False)
-        self._set_mode_hint("chat")
-        try:
-            self.engine.set_mode("chat")
-        except Exception:
-            pass
+    def _select_chat_mode(self, _checked=False):
+        self._apply_mode("chat")
 
-    def _select_agent_mode(self, _idx=None):
-        mode = self.mode_combo.currentData() or "plan"
-        self.chat_mode_btn.setChecked(False)
-        self.mode_combo.setEnabled(True)
-        self._set_mode_hint(mode)
-        try:
-            self.engine.set_mode(mode)
-        except Exception:
-            pass
+    def _on_mode_activated(self, index):
+        self._apply_mode(self.mode_combo.itemData(index) or "plan")
 
     def _current_mode(self):
-        if self.chat_mode_btn.isChecked():
-            return "chat"
-        return self.mode_combo.currentData() or "chat"
+        return getattr(self, "_mode", "chat")
+
+    # --- Provider / model selection ---
+    def reload_provider_model_controls(self):
+        try:
+            providers = self.engine.list_providers()
+        except Exception:
+            providers = []
+        try:
+            active = self.engine.llm.active_provider
+        except Exception:
+            active = None
+        self.provider_combo.blockSignals(True)
+        self.provider_combo.clear()
+        for pid in providers:
+            self.provider_combo.addItem(pid, pid)
+        if active in providers:
+            self.provider_combo.setCurrentIndex(providers.index(active))
+        self.provider_combo.blockSignals(False)
+        self._load_models_for(active or (providers[0] if providers else None))
+
+    def _load_models_for(self, pid):
+        self.model_combo.blockSignals(True)
+        self.model_combo.clear()
+        if pid:
+            try:
+                models = self.engine.cached_models(pid)
+            except Exception:
+                models = []
+            cur = (self.engine.llm.providers.get(pid) or {}).get("model")
+            if cur and cur not in models:
+                models = [cur] + list(models)
+            for m in models:
+                self.model_combo.addItem(m, m)
+            if cur:
+                idx = self.model_combo.findData(cur)
+                if idx >= 0:
+                    self.model_combo.setCurrentIndex(idx)
+        self.model_combo.blockSignals(False)
+
+    def _on_provider_selected(self, _idx):
+        pid = self.provider_combo.currentData()
+        if not pid:
+            return
+        try:
+            self.engine.set_provider(pid)
+        except Exception:
+            pass
+        self._load_models_for(pid)
+        self.refresh_status_bar()
+
+    def _on_model_activated(self, _idx):
+        self._apply_selected_model()
+
+    def _on_model_edited(self):
+        self._apply_selected_model()
+
+    def _apply_selected_model(self):
+        pid = self.provider_combo.currentData()
+        model = (self.model_combo.currentText() or "").strip()
+        if not pid or not model:
+            return
+        cur = (self.engine.llm.providers.get(pid) or {}).get("model")
+        if model == cur:
+            return
+        try:
+            self.engine.set_provider_model(pid, model)
+            self.refresh_status_bar()
+            self.statusBar().showMessage(f"Model set: {pid} \u2192 {model}", 5000)
+        except Exception as e:
+            self.statusBar().showMessage(f"Could not set model: {e}", 6000)
+
+    def refresh_models_clicked(self):
+        pid = self.provider_combo.currentData()
+        if not pid:
+            return
+        self.refresh_models_btn.setEnabled(False)
+        self.refresh_models_btn.setText("Loading\u2026")
+        self._models_worker = ModelListWorker(self.engine, pid)
+        self._models_worker.finished.connect(self._on_models_fetched)
+        self._models_worker.start()
+
+    def _on_models_fetched(self, res):
+        self.refresh_models_btn.setEnabled(True)
+        self.refresh_models_btn.setText("Refresh models")
+        if res.get("ok"):
+            self._load_models_for(self.provider_combo.currentData())
+            n = len(res.get("models") or [])
+            self.statusBar().showMessage(
+                f"Loaded {n} model(s) for {res.get('provider')}.", 5000)
+        else:
+            self.statusBar().showMessage(
+                f"Model list unavailable: {res.get('error')}", 6000)
+
+    def auto_refresh_models(self):
+        """Best-effort background refresh of the active provider's model list."""
+        try:
+            pid = self.engine.llm.active_provider
+            if pid not in self.engine.list_providers():
+                return
+            cache = (self.engine.config.get("llm_models_cache") or {}).get(pid) or {}
+            fetched = float(cache.get("fetched_at", 0) or 0)
+            if time.time() - fetched > 86400:
+                self.refresh_models_clicked()
+        except Exception:
+            pass
 
     def refresh_council_members(self):
         """Repopulate the council member dropdowns from configured providers."""
@@ -1496,6 +1621,7 @@ class KairosGUI(QMainWindow):
         self.engine.config = load_config()
         self.refresh_status_bar()
         self.refresh_council_members()
+        self.reload_provider_model_controls()
 
     def open_storage_dialog(self):
         StorageDialog(self.engine, self).exec()

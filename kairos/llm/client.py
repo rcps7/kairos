@@ -28,6 +28,51 @@ class LLMClient:
     def list_providers(self) -> list:
         return list(self.providers.keys())
 
+    def models_url(self, provider_id: str = None) -> str:
+        """Derive the OpenAI-style ``/models`` endpoint from the chat URL."""
+        pid = provider_id or self.active_provider
+        p = self.providers.get(pid) or {}
+        url = (p.get("api_url") or "").strip()
+        for suffix in ("/chat/completions", "/completions", "/responses"):
+            if url.endswith(suffix):
+                url = url[: -len(suffix)]
+                break
+        url = url.rstrip("/")
+        if url.endswith("/models"):
+            return url
+        return url + "/models"
+
+    def list_models(self, provider_id: str = None, timeout: float = 30.0) -> list:
+        """Fetch the available model ids from an OpenAI-compatible provider."""
+        pid = provider_id or self.active_provider
+        p = self.providers.get(pid)
+        if not p:
+            raise RuntimeError(f"LLM provider '{pid}' not configured.")
+        if not p.get("api_key"):
+            raise RuntimeError(f"API key missing for provider '{pid}'.")
+        r = self.client.get(self.models_url(pid),
+                            headers={"Authorization": f"Bearer {p['api_key']}"},
+                            timeout=timeout)
+        if r.status_code >= 400:
+            raise RuntimeError(f"models {r.status_code} ({pid}): {r.text[:200]}")
+        data = r.json()
+        items = None
+        if isinstance(data, dict):
+            items = data.get("data")
+            if items is None:
+                items = data.get("models")
+        if isinstance(data, list):
+            items = data
+        out = []
+        for it in (items or []):
+            if isinstance(it, dict):
+                mid = it.get("id") or it.get("name") or it.get("model")
+            else:
+                mid = str(it)
+            if mid:
+                out.append(str(mid))
+        return sorted(set(out))
+
     def is_vision(self, provider_id: str = None) -> bool:
         pid = provider_id or self.active_provider
         return bool(self.providers.get(pid, {}).get("vision", False))

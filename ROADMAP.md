@@ -1,6 +1,6 @@
 # KAIROS Roadmap
 
-Current version: **0.16.1** · License: MIT (PolyForm Noncommercial for the app) ·
+Current version: **0.16.2** · License: MIT (PolyForm Noncommercial for the app) ·
 Repo: https://github.com/rcps7/kairos
 
 This document tracks shipped functionality and the forward plan. Each release is
@@ -9,7 +9,7 @@ published on GitHub Releases with a **signed** `KAIROS-agent-bundle.zip` (plus
 digest and the Ed25519 signature against the pinned public key.
 
 Verification gates for every release: `python -m compileall kairos`,
-`python -m kairos.evaluation` (18/18) and `python -m pytest -q tests` (77 passing).
+`python -m kairos.evaluation` (18/18) and `python -m pytest -q tests` (81 passing).
 
 ---
 
@@ -52,6 +52,7 @@ Verification gates for every release: `python -m compileall kairos`,
 | 0.15.0 | Concurrency | FIFO job queue (`kairos/jobs.py`): chat, skills and background actions run one-at-a-time without freezing the UI; per-thread chat guard; skills run off the UI thread; thread-local token usage; provider-call gate. |
 | 0.16.0 | Workflows & web | **Plan/Execute modes** (Chat button + Plan/Execute dropdown; durable plans + autonomous step execution over the full toolkit). **Git workflows** (`git_tool.py`, system git, confined, opt-in push/pull). **Webhooks** (`webhook.py`: inbound triggers + outbound notifications, loopback `127.0.0.1:8765`, token/HMAC). **Draw & write** (`artifacts.py`: sanitized SVG diagrams + documents). **Web-page design** — persistent headed Playwright session with JS/mouse control (`browser.py`, `computer.py`) for editors like EasyEDA. **MCP server** now exposes resources & prompts and runs a headless engine (no PID/heartbeat/scheduler clash). |
 | 0.16.1 | Graph recovery | Non-destructive knowledge-graph repair: `graph_memory.quarantine_wal` (backup + quarantine a corrupt WAL), auto-repair on startup (`graph_memory.auto_repair`), GUI **Repair / Rebuild**, Telegram `/graphrepair`, CLI `python -m kairos.graph_memory diagnose\|recover\|rebuild`. Source data (`knowledge.db`, `graph_pending.db`) is never touched. |
+| 0.16.2 | Chat UX fixes | Fixed the Plan/Execute dropdown being disabled (mode state tracked explicitly; `activated` signal so re-picking works). Added a **provider & model selector** below the chat box with a live `GET /models` refresh, caching (`llm_models_cache`) and a daily background refresh. |
 
 Plan A is **fully complete**; Plan B's wave backlog is **fully complete**.
 

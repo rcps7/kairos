@@ -332,3 +332,21 @@ class GraphRepairWorker(QThread):
             self.finished.emit({"recovered": False, "error": str(e)})
 
 
+class ModelListWorker(QThread):
+    """Fetch the live model list for a provider (network call off the UI thread)."""
+
+    finished = Signal(dict)
+
+    def __init__(self, engine, provider_id):
+        super().__init__()
+        self.engine = engine
+        self.provider_id = provider_id
+
+    def run(self):
+        try:
+            self.finished.emit(self.engine.refresh_models(self.provider_id))
+        except Exception as e:
+            self.finished.emit({"ok": False, "provider": self.provider_id,
+                                "error": str(e), "models": []})
+
+

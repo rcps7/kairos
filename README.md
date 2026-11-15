@@ -163,6 +163,12 @@ buttons**, and is divided into three panes:
   each step using the full toolkit (web, git, artifacts, browser, memory). The
   choice is remembered. The **Council (multi-LLM)** checkbox, when ticked, takes
   precedence over the mode selector.
+- **Provider & model selector** (below the chat box) — pick the active **LLM
+  provider** and its **model** from dropdowns. The model list is cached and
+  refreshed from the provider's `GET /models` endpoint; click **Refresh models**
+  to fetch the latest list, and newer models appear automatically (the active
+  provider is refreshed once a day in the background). The model box is editable,
+  so you can also type a model id.
 - **Right pane** — system status (active character, active LLM, skill count, storage
   path), quick-action buttons, and the red **KILL SWITCH** button.
 - **Toolbar** — Search, Learn URL, Download, Skills, Providers, Peripherals,
@@ -262,6 +268,11 @@ KAIROS supports **any OpenAI-compatible chat API**. Each provider entry has:
 ### Managing providers
 
 - **GUI:** `Edit → LLM Providers` → Add / Set Active / Remove.
+- **GUI (chat box):** the **Provider** / **Model** dropdowns below the chat input
+  switch the active provider and model directly, and **Refresh models** pulls the
+  provider's live model list (`GET <api_url minus /chat/completions>/models`).
+  The list is cached in `llm_models_cache` and refreshed in the background once a
+  day; known models are shown as a fallback when the endpoint is unreachable.
 - **Telegram:** `/providers` (list) and `/setllm <id>` (switch).
 
 ---

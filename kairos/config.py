@@ -46,6 +46,7 @@ DEFAULT_CONFIG = {
         "members": [],
         "mode": "standard"
     },
+    "llm_models_cache": {},
     "active_character": "general",
     "character": {
         "dir_name": "AGENT_CHARACTER"
