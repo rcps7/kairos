@@ -22,6 +22,10 @@ ALL_CAPABILITIES = [
     "skills_run",
     "skills_manage",
     "memory",
+    "git_ops",
+    "webhook",
+    "artifacts",
+    "browser_control",
 ]
 
 CAPABILITY_LABELS = {
@@ -36,6 +40,10 @@ CAPABILITY_LABELS = {
     "skills_run": "Run skills",
     "skills_manage": "Create/edit/delete skills",
     "memory": "Retained data / memory",
+    "git_ops": "Git & version control",
+    "webhook": "Webhook endpoint",
+    "artifacts": "Draw diagrams / write documents",
+    "browser_control": "Browser automation (headed / JS)",
 }
 
 RESEARCH_CAPS = [

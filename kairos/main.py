@@ -18,7 +18,7 @@ from kairos.characters_presets import GENERAL_PROMPT
 from kairos.council import Council
 from kairos.graph_memory import GraphMemory
 from kairos.pending_store import PendingStore
-from kairos import guardrails, memory_extract
+from kairos import guardrails, memory_extract, structured
 from kairos.tools import (build_tool_protocol, format_tool_results, parse_tool_calls,
                           first_tool_marker, tool_marker_holdback)
 from kairos.email_client import EmailClient
@@ -51,7 +51,13 @@ MAX_TOOL_ROUNDS = 3
 
 
 class KairosEngine:
-    def __init__(self):
+    def __init__(self, headless: bool = False):
+        # ``headless=True`` builds an embedded engine that does NOT touch the
+        # watchdog files (pid/heartbeat) nor start the scheduler, collaboration,
+        # Discord or webhook servers. Used by ``python -m kairos.mcp_server`` so
+        # an MCP server process cannot clobber a running GUI instance's PID and
+        # heartbeat (or double-run scheduled tasks / bind duplicate ports).
+        self.headless = headless
         try:
             from kairos.win_runtime import ensure_vc_runtime
             ensure_vc_runtime()
@@ -83,7 +89,7 @@ class KairosEngine:
         self.planner = PlannerStore()
         self.tracing = SpanStore()
         self.scheduler_loop = None
-        if (self.config.get("scheduler", {}) or {}).get("enabled", True):
+        if not headless and (self.config.get("scheduler", {}) or {}).get("enabled", True):
             self.scheduler_loop = SchedulerLoop(
                 self, self.scheduler,
                 int((self.config.get("scheduler", {}) or {}).get("poll_seconds", 5)))
@@ -98,9 +104,14 @@ class KairosEngine:
         if self.graph:
             threading.Thread(target=self.backfill_graph_memory, daemon=True).start()
         self.collab = None
-        self._init_collaboration()
+        if not headless:
+            self._init_collaboration()
         self.discord = None
-        self._init_discord()
+        if not headless:
+            self._init_discord()
+        self.webhook = None
+        if not headless:
+            self._init_webhook()
         self._loop = None
         self._thread = None
         self._retention_thread = None
@@ -112,8 +123,9 @@ class KairosEngine:
         self._llm_gate = threading.RLock()  # serialise provider calls process-wide
         self._extract_busy = threading.Event()
         self.main_thread_caller = None  # set by the GUI for UI-opening skills
-        self._write_pid()
-        self._start_heartbeat()
+        if not headless:
+            self._write_pid()
+            self._start_heartbeat()
 
     def _skills_dir(self) -> str:
         base = self.config.get("storage_root", "")
@@ -214,12 +226,59 @@ class KairosEngine:
         from kairos import imagegen
         return imagegen.generate(prompt)
 
+    def set_mode(self, mode: str) -> str:
+        """Persist the default chat mode (chat|plan|execute)."""
+        mode = (mode or "chat").lower()
+        if mode not in ("chat", "plan", "execute"):
+            mode = "chat"
+        cfg = load_config()
+        cfg.setdefault("agent", {})["mode"] = mode
+        save_config(cfg)
+        self.config = load_config()
+        return mode
+
+    def get_mode(self) -> str:
+        return (self.config.get("agent", {}) or {}).get("mode", "chat")
+
     def computer_use(self, goal: str, url: str = None, progress=None) -> dict:
         from kairos import computer
         step_cb = None
         if progress:
             step_cb = lambda i, a, d: progress(f"step {i}: {a}")
         return computer.run(self, goal, start_url=url, on_step=step_cb)
+
+    # ---- Browser session / web-page design ----
+    def browser_session_open(self, url: str = "") -> str:
+        self.require("browser_control")
+        from kairos import browser
+        return browser.session_open(url)
+
+    def browser_eval_js(self, script: str, url: str = None) -> str:
+        self.require("browser_control")
+        from kairos import browser
+        try:
+            return browser.session_eval_js(script, url=url)
+        except Exception as e:
+            self.record_error("browser.js", e)
+            raise
+
+    def browser_mouse(self, action: str, **kwargs) -> str:
+        self.require("browser_control")
+        from kairos import browser
+        return browser.session_mouse(action, **kwargs)
+
+    def browser_close(self) -> str:
+        from kairos import browser
+        return browser.session_close()
+
+    def design_task(self, goal: str, url: str = None, progress=None) -> dict:
+        """Drive a persistent headed browser toward a design goal (e.g. EasyEDA)."""
+        self.require("browser_control")
+        from kairos import computer
+        step_cb = None
+        if progress:
+            step_cb = lambda i, a, d: progress(f"step {i}: {a}")
+        return computer.run(self, goal, start_url=url, on_step=step_cb, use_session=True)
 
     def add_scheduled_task(self, name: str, kind: str, payload: str, interval_seconds: int):
         return self.scheduler.add(name, kind, payload, interval_seconds)
@@ -378,6 +437,20 @@ class KairosEngine:
         except Exception:
             logger.exception("Failed to initialise Discord.")
             self.discord = None
+
+    def _init_webhook(self):
+        cfg = self.config.get("webhook", {}) or {}
+        if not cfg.get("enabled"):
+            return
+        try:
+            from kairos.webhook import WebhookManager
+            self.webhook = WebhookManager(self, cfg)
+            self.webhook.start()
+            logger.info("Webhook endpoint listening on %s:%s",
+                        cfg.get("host", "127.0.0.1"), cfg.get("port", 8765))
+        except Exception:
+            logger.exception("Failed to initialise webhook endpoint.")
+            self.webhook = None
 
     def _init_collaboration(self):
         cfg = self.config.get("collaboration", {}) or {}
@@ -538,6 +611,15 @@ class KairosEngine:
             except Exception:
                 pass
 
+    def notify_webhook(self, event: str, data: dict = None):
+        """Fire an outbound webhook notification (no-op if disabled)."""
+        wh = getattr(self, "webhook", None)
+        if wh:
+            try:
+                wh.notify(event, data or {})
+            except Exception:
+                pass
+
     # ---- Pending approval queue ----
     def graph_pending_count(self) -> int:
         try:
@@ -666,11 +748,19 @@ class KairosEngine:
             if cfg.get("use_in_chat", True) or cfg.get("use_in_tools", True):
                 self.spawn_graph_extract(prompt, source="chat", kind="chat")
 
-    def _tool_loop(self, conversation: str, progress=None) -> str:
-        """Run the provider-agnostic tool loop and return the final answer text."""
+    def _tool_loop(self, conversation: str, progress=None, full_tools: bool = False) -> str:
+        """Run the provider-agnostic tool loop and return the final answer text.
+
+        With ``full_tools`` the model is also offered the full toolkit (git,
+        artifacts, browser, memory, plans, ...) via the advanced ``<tool>``
+        protocol — used by Execute mode.
+        """
         reply = ""
         for _ in range(MAX_TOOL_ROUNDS):
-            reply = self.ask_llm(conversation, with_tools=True)
+            if full_tools:
+                reply = self.ask_llm(conversation, system_prompt=self._agent_tool_protocol())
+            else:
+                reply = self.ask_llm(conversation, with_tools=True)
             clean, calls = parse_tool_calls(reply)
             if not calls:
                 return clean or reply
@@ -868,7 +958,9 @@ class KairosEngine:
                 data = self.scrape_page(call.url)
                 return f"Page: {data.get('title', call.url)}\n{(data.get('text') or '')[:6000]}"
 
-            return f"(unknown tool: {call.name})"
+            # Fall back to the full toolkit (git, artifacts, browser, memory, plans).
+            from kairos import toolkit
+            return toolkit.execute(self, call.name, call.args)
         except PermissionError as e:
             return f"(tool not permitted: {e})"
         except Exception as e:
@@ -878,6 +970,128 @@ class KairosEngine:
     def chat_with_recall(self, prompt: str) -> str:
         """Backwards-compatible alias for :meth:`chat`."""
         return self.chat(prompt)
+
+    # ---- Plan & Execute modes ----
+    def _agent_tool_protocol(self) -> str:
+        """Base web protocol + the advanced <tool> protocol listing the toolkit."""
+        from kairos import toolkit
+        from kairos.tools import build_tool_protocol
+        base = build_tool_protocol(self.characters.capabilities())
+        try:
+            tools = toolkit.available_tools(self)
+        except Exception:
+            tools = toolkit.TOOL_SCHEMAS
+        lines = []
+        for t in tools:
+            f = t.get("function", {})
+            props = (f.get("parameters", {}) or {}).get("properties", {}) or {}
+            lines.append(f"  - {f.get('name','')}({', '.join(props.keys())}): "
+                         f"{(f.get('description') or '')[:110]}")
+        advanced = (
+            "ADVANCED TOOL PROTOCOL\n"
+            "The host executes tools; you never run them. To use any tool, end "
+            "your turn with one or more blocks and nothing else:\n"
+            '  <tool name="TOOL_NAME">{"arg": "value"}</tool>\n'
+            "Arguments are a JSON object using exactly the parameter names below.\n"
+            "Available tools:\n" + "\n".join(lines)
+        )
+        return f"{base}\n\n{advanced}"
+
+    def run_agent(self, prompt: str, mode: str = None, attachment_paths=None,
+                  progress=None) -> dict:
+        """Run a chat / plan / execute turn.
+
+        * ``chat``    — a normal answer (tools available).
+        * ``plan``    — decompose the goal into a durable plan (no execution).
+        * ``execute`` — decompose, then autonomously execute each step using the
+          full toolkit (web, git, artifacts, browser, memory), updating the plan.
+        """
+        mode = (mode or (self.config.get("agent", {}) or {}).get("mode", "chat")).lower()
+        if mode not in ("chat", "plan", "execute"):
+            mode = "chat"
+        if mode == "chat":
+            return {"mode": "chat",
+                    "text": self.chat(prompt, attachment_paths=attachment_paths,
+                                      progress=progress)}
+
+        context, images = ("", [])
+        if attachment_paths:
+            try:
+                context, images = self.attach_context(attachment_paths)
+            except Exception as e:
+                self.record_error("agent.attach", e)
+        cfg = self._graph_cfg()
+        if self.graph and cfg.get("use_in_chat", True):
+            g = self.graph_context(prompt)
+            if g:
+                context = f"{context}\n\n{g}" if context else g
+
+        steps = self._decompose(prompt, context)
+        plan_id = self.plan_create(prompt, steps)
+        if progress:
+            progress(f"Plan created: {len(steps)} step(s).")
+        if mode == "plan":
+            return {"mode": "plan", "plan_id": plan_id, "steps": steps,
+                    "text": self._format_plan(steps) + f"\n\n(plan id: {plan_id})"}
+
+        plan = self.plan_get(plan_id) or {"steps": []}
+        results = []
+        for i, st in enumerate(plan.get("steps", [])):
+            title = st["title"]
+            if progress:
+                progress(f"Executing step {i + 1}/{len(plan['steps'])}: {title}")
+            self.plan_update_step(st["id"], "doing", "")
+            try:
+                out = self._execute_step(prompt, title, results, context, progress)
+                self.plan_update_step(st["id"], "done", out)
+            except Exception as e:
+                out = f"(step failed: {e})"
+                self.plan_update_step(st["id"], "error", out)
+                self.record_error("agent.execute_step", e)
+            results.append(f"{i + 1}. {title}\n{out}")
+        self.plan_set_status(plan_id, "done")
+        final = "\n\n".join(results)
+        try:
+            self.knowledge.add_memory(f"[Task] {prompt}\n{final[:3000]}")
+        except Exception:
+            pass
+        self.spawn_graph_extract(final, source="agent", kind="task")
+        self.notify_webhook("agent.execute", {"goal": prompt[:300], "plan": plan_id})
+        return {"mode": "execute", "plan_id": plan_id, "steps": steps,
+                "text": f"Executed plan ({plan_id}):\n\n{final}"}
+
+    def _decompose(self, goal: str, context: str = "") -> list:
+        from kairos.planner import PLANNER_SYSTEM, plan_prompt
+        try:
+            raw = self.ask_llm(plan_prompt(goal, context), system_prompt=PLANNER_SYSTEM,
+                               use_character=False)
+        except Exception as e:
+            self.record_error("agent.plan", e)
+            return [f"Complete the goal: {goal}"]
+        data = structured.extract_json(raw)
+        steps = []
+        if isinstance(data, list):
+            steps = [str(s).strip() for s in data if str(s).strip()]
+        elif isinstance(data, dict):
+            steps = [str(s).strip() for s in (data.get("steps") or []) if str(s).strip()]
+        if not steps and raw:
+            steps = [ln.strip(" -*\t0123456789.") for ln in raw.splitlines() if ln.strip()]
+        return steps[:10] or [f"Complete the goal: {goal}"]
+
+    def _execute_step(self, goal: str, step: str, prior: list, context: str,
+                      progress=None) -> str:
+        conv = (f"GOAL:\n{goal}\n\nCONTEXT:\n{context[:4000]}\n\n"
+                f"PRIOR RESULTS:\n" + "\n".join(prior)[:4000] +
+                f"\n\nCURRENT STEP:\n{step}\n\n"
+                "Complete ONLY this step. Use tools when needed; report the "
+                "concrete result.")
+        return self._tool_loop(conv, progress=progress, full_tools=True)
+
+    def _format_plan(self, steps) -> str:
+        lines = ["Plan:"]
+        for i, s in enumerate(steps, 1):
+            lines.append(f"  {i}. {s}")
+        return "\n".join(lines)
 
     # ---- Attachments & Council ----
     def attach_context(self, paths):
@@ -961,6 +1175,123 @@ class KairosEngine:
         except Exception as e:
             self.record_error("media.download", e)
             raise
+
+    # ---- Git & version control ----
+    def git_available(self) -> bool:
+        from kairos import git_tool
+        return git_tool.available()
+
+    def git_summary(self) -> str:
+        self.require("git_ops")
+        from kairos import git_tool
+        return git_tool.summary()
+
+    def git_status(self) -> str:
+        self.require("git_ops")
+        from kairos import git_tool
+        try:
+            return git_tool.status()
+        except Exception as e:
+            self.record_error("git.status", e)
+            raise
+
+    def git_diff(self, staged: bool = False, ref: str = None) -> str:
+        self.require("git_ops")
+        from kairos import git_tool
+        try:
+            return git_tool.diff(staged=staged, ref=ref)
+        except Exception as e:
+            self.record_error("git.diff", e)
+            raise
+
+    def git_log(self, n: int = 20) -> str:
+        self.require("git_ops")
+        from kairos import git_tool
+        return git_tool.log(n)
+
+    def git_branches(self) -> str:
+        self.require("git_ops")
+        from kairos import git_tool
+        return git_tool.branches()
+
+    def git_create_branch(self, name: str, checkout: bool = True) -> str:
+        self.require("git_ops")
+        from kairos import git_tool
+        return git_tool.create_branch(name=name, checkout=checkout)
+
+    def git_checkout(self, name: str) -> str:
+        self.require("git_ops")
+        from kairos import git_tool
+        return git_tool.checkout(name=name)
+
+    def git_commit(self, message: str, add_all: bool = True) -> str:
+        self.require("git_ops")
+        from kairos import git_tool
+        try:
+            out = git_tool.commit(message=message, add_all=add_all)
+            self.notify_webhook("git.commit", {"message": message, "output": out[:500]})
+            return out
+        except Exception as e:
+            self.record_error("git.commit", e)
+            raise
+
+    def git_push(self, remote: str = "origin", branch: str = None) -> str:
+        self.require("git_ops")
+        from kairos import git_tool
+        try:
+            return git_tool.push(remote=remote, branch=branch)
+        except Exception as e:
+            self.record_error("git.push", e)
+            raise
+
+    def git_pull(self) -> str:
+        self.require("git_ops")
+        from kairos import git_tool
+        try:
+            return git_tool.pull()
+        except Exception as e:
+            self.record_error("git.pull", e)
+            raise
+
+    # ---- Draw & write (artifacts) ----
+    def write_document(self, name: str, content: str, fmt: str = None) -> str:
+        self.require("artifacts")
+        from kairos import artifacts
+        try:
+            path = artifacts.write_document(name, content, fmt)
+            self.notify_webhook("artifact.write", {"name": name, "path": path})
+            return path
+        except Exception as e:
+            self.record_error("artifacts.write", e)
+            raise
+
+    def draw_diagram(self, kind: str, name: str, **kwargs) -> str:
+        self.require("artifacts")
+        from kairos import artifacts
+        kind = (kind or "svg").lower()
+        try:
+            if kind == "svg":
+                path = artifacts.draw_svg(name, kwargs.get("svg", ""))
+            elif kind == "bar":
+                path = artifacts.draw_svg(name, artifacts.bar_chart(
+                    kwargs.get("title", name), kwargs.get("labels"), kwargs.get("values")))
+            elif kind == "line":
+                path = artifacts.draw_svg(name, artifacts.line_chart(
+                    kwargs.get("title", name), kwargs.get("labels"), kwargs.get("values")))
+            elif kind in ("flowchart", "flow"):
+                path = artifacts.draw_svg(name, artifacts.flowchart(
+                    kwargs.get("title", name), kwargs.get("nodes"), kwargs.get("edges")))
+            else:
+                raise ValueError(f"Unknown diagram kind '{kind}'")
+            self.notify_webhook("artifact.draw", {"name": name, "path": path})
+            return path
+        except Exception as e:
+            self.record_error("artifacts.draw", e)
+            raise
+
+    def list_artifacts(self, limit: int = 200) -> list:
+        from kairos import artifacts
+        return artifacts.list_artifacts(limit)
 
     # ---- Skills ----
     def list_skills(self) -> list:
@@ -1276,6 +1607,16 @@ class KairosEngine:
         try:
             if self.discord:
                 self.discord.stop()
+        except Exception:
+            pass
+        try:
+            if self.webhook:
+                self.webhook.stop()
+        except Exception:
+            pass
+        try:
+            from kairos import browser as _browser
+            _browser.session_close()
         except Exception:
             pass
         try:

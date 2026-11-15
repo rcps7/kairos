@@ -138,10 +138,21 @@ def parse_tool_calls(text: str):
     _collect(_RE_SCRAPE, "scrape")
 
     for m in _RE_GENERIC.finditer(text):
-        call = _call_from_name(m.group(1), _inner_arg(m.group(2)))
-        if call:
-            calls.append(call)
-            spans.append(m.span())
+        name = m.group(1)
+        inner = m.group(2)
+        call = _call_from_name(name, _inner_arg(inner))
+        if not call:
+            # Generic advanced form: <tool name="git_status">{"...": ...}</tool>
+            args = {}
+            mj = _RE_JSON.search(inner or "")
+            if mj:
+                try:
+                    args = json.loads(mj.group(0))
+                except Exception:
+                    args = {}
+            call = ToolCall(name, args if isinstance(args, dict) else {})
+        calls.append(call)
+        spans.append(m.span())
 
     for m in _RE_JSON.finditer(text):
         blob = m.group(0)

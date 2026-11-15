@@ -78,8 +78,46 @@ def _check_tool_coverage():
     from kairos import toolkit
     names = [t["function"]["name"] for t in toolkit.TOOL_SCHEMAS]
     for n in ("browser_action", "google_search", "delegate", "sql_query",
-              "generate_image", "notion_search"):
+              "generate_image", "notion_search", "git_status", "git_commit",
+              "write_document", "draw_diagram", "browser_js", "browser_mouse"):
         assert n in names, f"missing tool {n}"
+
+
+def _check_git_tool():
+    from kairos import git_tool
+    assert git_tool._check_name("feature/x") == "feature/x"
+    try:
+        git_tool._check_name("../evil")
+        raise AssertionError("bad branch name allowed")
+    except ValueError:
+        pass
+
+
+def _check_webhook():
+    from kairos import webhook
+    assert webhook._is_loopback("127.0.0.1") and not webhook._is_loopback("1.2.3.4")
+    assert webhook._sign("s", b"body").startswith("sha256=")
+
+
+def _check_artifacts():
+    from kairos import artifacts
+    assert artifacts.bar_chart("t", ["a"], [1]).startswith("<svg")
+    safe = artifacts.sanitize_svg(
+        '<svg xmlns="http://www.w3.org/2000/svg"><script>x</script></svg>')
+    assert "<script" not in safe.lower()
+
+
+def _check_modes():
+    from kairos import tools, planner
+    _, calls = tools.parse_tool_calls('<tool name="git_status">{}</tool>')
+    assert calls and calls[0].name == "git_status"
+    assert "JSON" in planner.plan_prompt("goal")
+
+
+def _check_mcp_extras():
+    from kairos import mcp_server
+    assert mcp_server._resources()
+    assert "make_plan" in [p["name"] for p in mcp_server._prompt_defs()]
 
 
 def _check_release_signing():
@@ -118,6 +156,11 @@ CHECKS = [
     ("release signing", _check_release_signing),
     ("gui split", _check_gui_split),
     ("rag + computer", _check_rag_and_computer),
+    ("git tool", _check_git_tool),
+    ("webhook", _check_webhook),
+    ("artifacts", _check_artifacts),
+    ("modes", _check_modes),
+    ("mcp extras", _check_mcp_extras),
 ]
 
 

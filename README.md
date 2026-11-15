@@ -57,6 +57,12 @@ Licensed under the **PolyForm Noncommercial License 1.0.0** (free for personal/n
 | Watchdog with kill switch + heartbeat monitoring | `kill.bat`, GUI, Telegram `/kill` |
 | Voice-to-text (Talk button) + spoken replies + live voice meter | GUI |
 | Animated mood orb (thinking/speaking/success/error) | GUI |
+| Plan & Execute modes — **Chat** button + **Plan/Execute** dropdown beside the chat box | GUI / Telegram |
+| Git & version-control workflows (system `git`, confined, opt-in push/pull) | GUI / Telegram |
+| Webhooks — inbound triggers + outbound notifications (loopback `127.0.0.1:8765`) | HTTP / GUI / Telegram |
+| Draw diagrams (SVG) & write documents to the Artifacts folder | GUI / Telegram |
+| Web-page design via a persistent, headed browser (e.g. EasyEDA) | GUI / Telegram |
+| MCP server — resources, prompts & tools over stdio | `python -m kairos.mcp_server` |
 | CLI + GUI front-ends | `run.bat` / `python -m kairos.main` |
 
 ---
@@ -151,6 +157,12 @@ buttons**, and is divided into three panes:
 - **Center pane** — the chat console. Type instructions directly; responses appear
   here. Search results are numbered with clickable links. A **Clear** button empties
   only the visible chat (storage and memory are untouched).
+- **Mode selector** (beside the input) — a **Chat** button (the default, independent
+  mode) and a **Plan / Execute** dropdown. *Plan* produces a durable, step-by-step
+  plan without running it; *Execute* creates the plan and then autonomously runs
+  each step using the full toolkit (web, git, artifacts, browser, memory). The
+  choice is remembered. The **Council (multi-LLM)** checkbox, when ticked, takes
+  precedence over the mode selector.
 - **Right pane** — system status (active character, active LLM, skill count, storage
   path), quick-action buttons, and the red **KILL SWITCH** button.
 - **Toolbar** — Search, Learn URL, Download, Skills, Providers, Peripherals,
@@ -176,7 +188,9 @@ buttons**, and is divided into three panes:
 | Menu | Actions |
 |------|---------|
 | **File** | New Session (`Ctrl+N`), Exit, Kill Switch (Emergency) |
-| **Edit** | LLM Providers, Storage Settings, Email Settings, Telegram Settings…, Peripheral Control, Retention (Delete Expired), Skills, Agent Character…, Knowledge Graph…, Pending Knowledge… |
+| **Edit** | LLM Providers, Storage Settings, Email Settings, Telegram Settings…, Peripheral Control, Retention (Delete Expired), Skills, Agent Character…, Knowledge Graph…, Pending Knowledge…, Git & Version Control…, Webhook… |
+| **Tools** | Predictive Engine, Web Designer (browser)…, Drawings & Documents… |
+| **Agent** | Settings…, Usage & Traces…, Plans & Tasks… |
 | **View** | Self-Reflect, Show Lessons, Refresh Status |
 | **Window** | Minimize, Maximize |
 | **Help** | About Kairos |
@@ -216,6 +230,15 @@ buttons**, and is divided into three panes:
 | `/read <port>` | Read data from a port |
 | `/close <port>` | Close a serial port |
 | `/kill` | Kill switch (with confirmation) |
+| `/mode <chat\|plan\|execute>` | Set the agent mode |
+| `/planagent <goal>` | Produce a durable plan (no execution) |
+| `/execute <goal>` | Plan then autonomously execute every step |
+| `/git <status\|diff\|log\|branches\|commit <msg>\|branch <n>\|checkout <n>\|pull\|push>` | Git workflows |
+| `/write <file> \| <content>` | Save a document to the Artifacts folder |
+| `/draw <name> \| <svg or description>` | Draw an SVG diagram |
+| `/artifacts` | List drawings & documents |
+| `/webhooks` | Show webhook configuration |
+| `/design <url> \| <goal>` | Drive a headed browser to design a web page |
 
 ---
 
@@ -490,8 +513,8 @@ Kairos includes standard agentic building blocks:
 - **Tracing & budgets** — per-call spans (`kairos/tracing.py`) and an optional
   daily token budget (`agent.budgets.daily_tokens`).
 
-Planned additions: Model Context Protocol (MCP) client, browser automation,
-data connectors, text-to-SQL, image generation and a container skill sandbox.
+Planned additions: MCP resource/prompt **subscriptions**, an HTTP/SSE MCP
+transport, and a portable signed installer.
 
 ### Wave 2 (connectors & data)
 - **Text-to-SQL** — read-only DuckDB queries over registered CSV/Parquet files
@@ -750,6 +773,154 @@ If no vision-capable member is present, images are noted but not analyzed.
 
 ---
 
+## Chat Modes (Plan & Execute)
+
+Next to the chat input there is a **Chat** button and a **Plan / Execute** dropdown.
+
+- **Chat** — the normal conversational mode (tools available). This is the default.
+- **Plan** — Kairos decomposes your request into an ordered, concrete step list and
+  stores it as a durable plan (`planner.db`); nothing is executed. You can view
+  plans under **Agent → Plans & Tasks…** or `/plans`.
+- **Execute** — Kairos produces the plan and then **autonomously executes each
+  step**, using the full toolkit (web search/learn/scrape, git commits, drawing &
+  document artifacts, browser actions, memory). Each step's status and result are
+  persisted; progress is streamed into the console.
+
+The selected mode is saved as `agent.mode` in the config and restored on startup.
+The **Council (multi-LLM)** checkbox takes precedence when ticked. Set the mode
+from Telegram with `/mode chat|plan|execute`, produce a plan with
+`/planagent <goal>`, or run it with `/execute <goal>`.
+
+> Execute mode runs with the *active character's* capabilities; tools it is not
+> permitted to use are refused. It never runs shell commands, force-pushes, or
+> evaluates JavaScript unless those are explicitly enabled.
+
+---
+
+## Git & Version Control
+
+Kairos can run git workflows for you using the **system `git` CLI** (no extra
+dependency). Configure it under **Edit → Git & Version Control…**:
+
+- **Repository root** — all git commands are confined to this folder
+  (`git.repo_root`, defaulting to `agent.file_root` / your home).
+- **Allow push / Allow pull** — off by default; must be explicitly enabled.
+- **Allow destructive operations** — off by default (force/hard-reset/clean/branch
+  delete are blocked unless enabled).
+- **Author name / email** — optional, applied to commits.
+
+Supported operations: `status`, `diff`, `log`, `branches`, `create branch`,
+`checkout`, `add`, `commit`, `init`, `stash`, `pull`, `push`. Commands run with
+`shell=False`, arguments are validated (no leading dashes, no `..` traversal), and
+output is redacted. The same actions are exposed to the LLM as tools
+(`git_status`, `git_diff`, `git_log`, `git_commit`, `git_create_branch`,
+`git_checkout`) and via Telegram `/git …`, gated by the `git_ops` capability.
+
+---
+
+## Webhooks
+
+Kairos can both **receive** and **send** webhooks. The endpoint is **off by
+default** and, when enabled, binds to **`127.0.0.1:8765`** (loopback only).
+
+### Inbound (external → Kairos)
+
+Configure hooks under **Edit → Webhook…** (or `webhook.hooks` in the config). Each
+hook maps a name to an action:
+
+| Action | Effect |
+|--------|--------|
+| `ask` | Send the payload to the LLM (optionally via a `payload` template with `{body}`) |
+| `skill` | Run a named skill |
+| `remember` | Store the payload in retained memory |
+| `notify` | Forward the payload to your Telegram chat(s) |
+
+POST JSON to `POST http://127.0.0.1:8765/hook/<name>`. A shared **secret**
+(stored in the OS keyring) is required and sent as the `X-Kairos-Token` header; set
+**Require HMAC signature** to also accept `X-Kairos-Signature: sha256=<hex>` (HMAC
+of the raw body). Add `?wait=1` to run synchronously and receive the result;
+otherwise the endpoint returns `202 Accepted` immediately. `GET /health` returns
+the service status. Body size is capped and payloads are treated as untrusted data.
+
+### Outbound (Kairos → URL)
+
+Enable outbound notifications and list one or more URLs. Kairos POSTs a signed
+JSON body (`{"event": …,"data": …}`) to each URL when notable events happen:
+agent/job completion, scheduled-task runs, predictions, pending-knowledge and
+git-commit events. Optional HMAC signing via the outbound secret.
+
+> Non-loopback binding is refused unless you explicitly set
+> `webhook.allow_public_bind` — only do this behind your own firewall/proxy.
+
+---
+
+## Drawings & Documents (draw & write)
+
+Kairos can produce files and store them under
+`<storage_root>/Kairos/Artifacts/`:
+
+- **Drawings (SVG)** — bar charts, line charts, flowcharts, or raw LLM-generated
+  SVG. LLM SVG is **sanitized** (scripts, event handlers, `javascript:` URIs and
+  external `href`s are stripped) before it is written, so an opened file cannot
+  execute code or phone home.
+- **Documents** — Markdown, text, code, JSON, CSV and similar, written atomically.
+
+Access it via **Tools → Drawings & Documents…** (browse/open/reveal + create a
+document), the tools `draw_diagram` and `write_document`, or Telegram
+`/write <file> | <content>` and `/draw <name> | <svg or description>`. Gated by the
+`artifacts` capability (`artifacts.enabled`, `artifacts.allow_svg`).
+
+---
+
+## Web-Page Design (headed browser)
+
+For design work on canvas/SVG editors such as **EasyEDA**, Kairos can drive a
+**persistent, headed Chromium** session and interact with the page:
+
+- Open a real browser window and keep it open across actions.
+- Click/type by CSS selector, or click/drag at coordinates on a canvas.
+- Press keyboard keys.
+- Evaluate JavaScript (`browser.allow_js_eval`) to call the site's own editor API.
+
+Open **Tools → Web Designer (browser)…**, enter a start URL and a goal, then
+**Open Session** and **Run Design Task**. The task planner navigates, acts and
+observes the page (screenshots go to the Media folder). The same capability is
+exposed as tools `browser_open`, `browser_js`, `browser_mouse` and via Telegram
+`/design <url> | <goal>`, gated by the `browser_control` capability.
+
+Setup: install the browser once with `python -m playwright install chromium`, then
+set `browser.enabled` (and optionally `browser.allow_js_eval`). JavaScript
+evaluation is **off by default**.
+
+> Results depend on the target site's DOM/JS API; EasyEDA tasks are best-effort and
+> should be reviewed before you rely on them.
+
+---
+
+## Model Context Protocol (MCP) server
+
+Kairos can expose its tools to any MCP client over stdio:
+
+```bat
+python -m kairos.mcp_server
+```
+
+The server speaks newline-delimited JSON-RPC 2.0 and supports `initialize`,
+`tools/list`, `tools/call`, plus **`resources/list`/`resources/read`** and
+**`prompts/list`/`prompts/get`** (toggle under `mcp.server.expose_resources` /
+`expose_prompts`). Built-in resources include the Kairos version, a
+secret-redacted config view, retained memories and knowledge-graph stats; built-in
+prompts include `research_topic`, `make_plan`, `summarize_page` and
+`git_commit_message`.
+
+The MCP process builds a **headless engine** — it does **not** touch the watchdog
+PID/heartbeat files and does not start the scheduler, collaboration, Discord or
+webhook services, so it can run safely alongside the GUI. Configure the client
+side (connect Kairos to *other* MCP servers) and the server toggles under
+**Agent → Settings… → MCP**.
+
+---
+
 ## Updates
 
 KAIROS can update itself from GitHub Releases.
@@ -791,6 +962,47 @@ Location: `%USERPROFILE%\.kairos\config.json`
   "active_character": "general",
   "character": {
     "dir_name": "AGENT_CHARACTER"
+  },
+  "agent": {
+    "mode": "chat",
+    "native_tools": false,
+    "streaming": true,
+    "allow_file_write": true,
+    "allow_shell": false
+  },
+  "git": {
+    "enabled": false,
+    "repo_root": null,
+    "allow_push": false,
+    "allow_pull": false,
+    "allow_destructive": false,
+    "author_name": "",
+    "author_email": "",
+    "token": null
+  },
+  "webhook": {
+    "enabled": false,
+    "host": "127.0.0.1",
+    "port": 8765,
+    "allow_public_bind": false,
+    "secret": null,
+    "require_signature": false,
+    "hooks": {},
+    "outbound": {"enabled": false, "urls": [], "secret": null}
+  },
+  "browser": {
+    "enabled": false,
+    "headless": false,
+    "allow_js_eval": false
+  },
+  "artifacts": {
+    "enabled": true,
+    "allow_svg": true
+  },
+  "mcp": {
+    "enabled": false,
+    "servers": {},
+    "server": {"enabled": false, "expose_resources": true, "expose_prompts": true}
   }
 }
 ```
@@ -801,6 +1013,18 @@ Location: `%USERPROFILE%\.kairos\config.json`
 - `active_llm` — currently selected provider.
 - `active_character` — id of the active Agent Character (see [Agent Characters](#agent-characters)).
 - `character.dir_name` — folder under `<storage_root>/Kairos/` holding character profiles.
+- `agent.mode` — default chat mode: `chat`, `plan`, or `execute`.
+- `git.*` — git integration (disabled by default); `git.token` is stored in the keyring (`git_token`).
+- `webhook.*` — webhook endpoint (disabled by default; loopback **`127.0.0.1:8765`**); `webhook.secret` and `webhook.outbound.secret` live in the keyring (`webhook_secret`, `webhook_outbound_secret`).
+- `browser.*` — persistent headed browser session (disabled by default); JS evaluation requires `browser.allow_js_eval`.
+- `artifacts.*` — drawing/document output (enabled by default).
+- `mcp.server.*` — expose Kairos as an MCP server (`enabled`, `expose_resources`, `expose_prompts`).
+
+All secrets are `null` in the file and live in the OS keyring (service `kairos`):
+`telegram_token`, `llm_api_key_<provider>`, `mirofish_zep_api_key`,
+`email_password_<addr>`, `github_token`, `notion_token`, `google_token`,
+`image_api_key`, `discord_token`, `webhook_secret`, `webhook_outbound_secret`,
+`git_token`.
 
 ---
 
@@ -819,6 +1043,14 @@ kairos/
 │   ├── retention.py            # weekly retention sweep
 │   ├── email_client.py         # IMAP/SMTP
 │   ├── learning.py             # error memory + reflection
+│   ├── git_tool.py             # git & version-control workflows
+│   ├── webhook.py              # inbound/outbound webhooks
+│   ├── artifacts.py            # draw (SVG) & write documents
+│   ├── planner.py              # durable plans (Plan/Execute modes)
+│   ├── browser.py              # Playwright one-shot + persistent session
+│   ├── computer.py             # browser computer-use loop
+│   ├── mcp_server.py           # MCP stdio server (tools/resources/prompts)
+│   ├── mcp_client.py           # MCP stdio client
 │   ├── llm/                    # multi-provider LLM client
 │   │   ├── client.py
 │   │   └── kimi.py             # backwards-compatible wrapper

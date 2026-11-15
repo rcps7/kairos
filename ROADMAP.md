@@ -1,6 +1,6 @@
 # KAIROS Roadmap
 
-Current version: **0.15.0** · License: MIT (PolyForm Noncommercial for the app) ·
+Current version: **0.16.0** · License: MIT (PolyForm Noncommercial for the app) ·
 Repo: https://github.com/rcps7/kairos
 
 This document tracks shipped functionality and the forward plan. Each release is
@@ -9,7 +9,7 @@ published on GitHub Releases with a **signed** `KAIROS-agent-bundle.zip` (plus
 digest and the Ed25519 signature against the pinned public key.
 
 Verification gates for every release: `python -m compileall kairos`,
-`python -m kairos.evaluation` (12/12) and `python -m pytest -q tests` (38 passing).
+`python -m kairos.evaluation` (17/17) and `python -m pytest -q tests` (74 passing).
 
 ---
 
@@ -50,6 +50,7 @@ Verification gates for every release: `python -m compileall kairos`,
 | 0.14.1 | CI fix | Pytest `pythonpath` + CI test deps; dropped stray BOM in `kairos/__init__.py`; numpy-free rerank cosine; GUI check/test skip when PySide6 absent. |
 | 0.14.2 | Streaming tools | Streamed replies now execute tool requests (search/learn/scrape) instead of printing raw tool markup; parser also accepts `web_search("...")` form. |
 | 0.15.0 | Concurrency | FIFO job queue (`kairos/jobs.py`): chat, skills and background actions run one-at-a-time without freezing the UI; per-thread chat guard; skills run off the UI thread; thread-local token usage; provider-call gate. |
+| 0.16.0 | Workflows & web | **Plan/Execute modes** (Chat button + Plan/Execute dropdown; durable plans + autonomous step execution over the full toolkit). **Git workflows** (`git_tool.py`, system git, confined, opt-in push/pull). **Webhooks** (`webhook.py`: inbound triggers + outbound notifications, loopback `127.0.0.1:8765`, token/HMAC). **Draw & write** (`artifacts.py`: sanitized SVG diagrams + documents). **Web-page design** — persistent headed Playwright session with JS/mouse control (`browser.py`, `computer.py`) for editors like EasyEDA. **MCP server** now exposes resources & prompts and runs a headless engine (no PID/heartbeat/scheduler clash). |
 
 Plan A is **fully complete**; Plan B's wave backlog is **fully complete**.
 
@@ -66,7 +67,6 @@ Legend: **P** = priority (H/M/L) · **E** = effort (S/M/L) · **Dep** = new depe
 | Per-provider cost governance | Daily/total token budgets per provider (extend `usage.py` + `ask_llm` guard). | M | S | — |
 | RAG citations | Return source URL/title with reranked items and render them in answers. | M | S | — |
 | Evaluation: golden agent tasks | Add end-to-end task checks + optional LLM-judge; wire into CI. | M | M | — |
-| MCP resource/prompt support | Beyond tools: list/read resources and prompts from MCP servers. | M | M | — |
 
 ### Later
 | Item | Notes | P | E | Dep |
@@ -125,10 +125,11 @@ Features that are shipped but need local setup; all are **off by default**:
 ## Tests & CI
 
 - `tests/` — security & config secrets, skills sandbox, planner, tools, guardrails,
-  usage, SQL, MCP (client + server), connectors, image, Discord, sub-agents,
-  signing, GUI split, computer-use, RAG rerank, streaming tool loop, FIFO job
-  queue, per-thread chat concurrency.
-- `python -m kairos.evaluation` — 12 offline smoke checks.
+  usage, SQL, MCP (client + server + resources/prompts), connectors, image, Discord,
+  sub-agents, signing, GUI split, computer-use, RAG rerank, streaming tool loop,
+  FIFO job queue, per-thread chat concurrency, **git tool, webhook, artifacts,
+  chat modes**. 
+- `python -m kairos.evaluation` — 17 offline smoke checks.
 - CI: `.github/workflows/ci.yml` (Ubuntu + Windows; Python 3.10/3.12; compile + tests).
 
 ---

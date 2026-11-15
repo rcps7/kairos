@@ -1977,15 +1977,31 @@ class AgentSettingsDialog(QDialog):
         bf.addRow("Daily token budget (0=off):", self.daily_tokens)
         layout.addWidget(base)
 
-        mcp = QGroupBox("MCP servers (JSON)")
+        mcp = QGroupBox("MCP")
         mf = QVBoxLayout(mcp)
-        self.mcp_enabled = QCheckBox("Enable MCP")
+        self.mcp_enabled = QCheckBox("Enable MCP client (connect to external MCP servers)")
         self.mcp_enabled.setChecked(bool((cfg.get("mcp", {}) or {}).get("enabled")))
         mf.addWidget(self.mcp_enabled)
+        mf.addWidget(QLabel("MCP servers (JSON):"))
         self.mcp_edit = QTextEdit()
         self.mcp_edit.setFont(QFont("Consolas", 9))
         self.mcp_edit.setPlainText(_json.dumps((cfg.get("mcp", {}) or {}).get("servers", {}), indent=2))
         mf.addWidget(self.mcp_edit, 1)
+        srv_cfg = (cfg.get("mcp", {}) or {}).get("server", {}) or {}
+        self.mcp_server_enabled = QCheckBox("Expose Kairos as an MCP server "
+                                            "(run: python -m kairos.mcp_server)")
+        self.mcp_server_enabled.setChecked(bool(srv_cfg.get("enabled")))
+        self.mcp_expose_res = QCheckBox("Expose resources")
+        self.mcp_expose_res.setChecked(bool(srv_cfg.get("expose_resources", True)))
+        self.mcp_expose_prompts = QCheckBox("Expose prompts")
+        self.mcp_expose_prompts.setChecked(bool(srv_cfg.get("expose_prompts", True)))
+        copy_cmd = QPushButton("Copy server command")
+        copy_cmd.clicked.connect(lambda: QApplication.clipboard().setText(
+            "python -m kairos.mcp_server"))
+        mf.addWidget(self.mcp_server_enabled)
+        mf.addWidget(self.mcp_expose_res)
+        mf.addWidget(self.mcp_expose_prompts)
+        mf.addWidget(copy_cmd)
         layout.addWidget(mcp)
 
         conn = QGroupBox("Connectors (tokens stored in the OS keyring)")
@@ -2058,6 +2074,10 @@ class AgentSettingsDialog(QDialog):
             a["image"]["api_key"] = None
             c.setdefault("mcp", {})["enabled"] = self.mcp_enabled.isChecked()
             c["mcp"]["servers"] = servers
+            srv = c["mcp"].setdefault("server", {})
+            srv["enabled"] = self.mcp_server_enabled.isChecked()
+            srv["expose_resources"] = self.mcp_expose_res.isChecked()
+            srv["expose_prompts"] = self.mcp_expose_prompts.isChecked()
             conn = c.setdefault("connectors", {})
             conn.setdefault("github", {})["enabled"] = self.gh_enabled.isChecked()
             conn.setdefault("notion", {})["enabled"] = self.nt_enabled.isChecked()
@@ -2390,5 +2410,450 @@ class RetentionDialog(QDialog):
         deleted = self.engine.approve_retention_deletion(selected)
         QMessageBox.information(self, "Kairos", f"Deleted {deleted} item(s).")
         self.accept()
+
+
+class GitDialog(QDialog):
+    """Git & version-control workflows (uses the system git CLI)."""
+
+    def __init__(self, engine, parent=None):
+        super().__init__(parent)
+        self.engine = engine
+        self.setWindowTitle("Git & Version Control")
+        self.setStyleSheet(_dialog_style())
+        self.resize(780, 660)
+        cfg = engine.config.get("git", {}) or {}
+        layout = QVBoxLayout(self)
+
+        settings = QGroupBox("Settings")
+        sf = QFormLayout(settings)
+        self.g_enabled = QCheckBox("Enable git integration")
+        self.g_enabled.setChecked(bool(cfg.get("enabled")))
+        self.g_root = QLineEdit(cfg.get("repo_root") or "")
+        root_row = QHBoxLayout()
+        root_row.addWidget(self.g_root, 1)
+        browse = QPushButton("Browse\u2026")
+        browse.clicked.connect(self._browse)
+        root_row.addWidget(browse)
+        self.g_push = QCheckBox("Allow push")
+        self.g_push.setChecked(bool(cfg.get("allow_push")))
+        self.g_pull = QCheckBox("Allow pull")
+        self.g_pull.setChecked(bool(cfg.get("allow_pull")))
+        self.g_destructive = QCheckBox("Allow destructive operations")
+        self.g_destructive.setChecked(bool(cfg.get("allow_destructive")))
+        self.g_name = QLineEdit(cfg.get("author_name") or "")
+        self.g_email = QLineEdit(cfg.get("author_email") or "")
+        sf.addRow(self.g_enabled)
+        sf.addRow("Repository root:", root_row)
+        sf.addRow(self.g_push)
+        sf.addRow(self.g_pull)
+        sf.addRow(self.g_destructive)
+        sf.addRow("Author name:", self.g_name)
+        sf.addRow("Author email:", self.g_email)
+        save = QPushButton("Save settings")
+        save.clicked.connect(self._save)
+        sf.addRow(save)
+        layout.addWidget(settings)
+
+        actions = QGroupBox("Repository")
+        af = QHBoxLayout(actions)
+        for label, op in (("Status", "status"), ("Diff", "diff"), ("Log", "log"),
+                          ("Branches", "branches")):
+            b = QPushButton(label)
+            b.clicked.connect(lambda _=False, o=op: self._run(o))
+            af.addWidget(b)
+        layout.addWidget(actions)
+
+        commit_row = QHBoxLayout()
+        self.commit_msg = QLineEdit()
+        self.commit_msg.setPlaceholderText("Commit message\u2026")
+        commit_btn = QPushButton("Commit All")
+        commit_btn.clicked.connect(self._commit)
+        commit_row.addWidget(self.commit_msg, 1)
+        commit_row.addWidget(commit_btn)
+        layout.addLayout(commit_row)
+
+        branch_row = QHBoxLayout()
+        self.branch_name = QLineEdit()
+        self.branch_name.setPlaceholderText("branch name")
+        nb = QPushButton("New Branch")
+        nb.clicked.connect(self._new_branch)
+        co = QPushButton("Checkout")
+        co.clicked.connect(self._checkout)
+        branch_row.addWidget(self.branch_name, 1)
+        branch_row.addWidget(nb)
+        branch_row.addWidget(co)
+        layout.addLayout(branch_row)
+
+        if cfg.get("allow_push"):
+            push = QPushButton("Push")
+            push.clicked.connect(lambda: self._run("push"))
+            layout.addWidget(push)
+        if cfg.get("allow_pull"):
+            pull = QPushButton("Pull")
+            pull.clicked.connect(lambda: self._run("pull"))
+            layout.addWidget(pull)
+
+        self.out = QTextBrowser()
+        self.out.setStyleSheet(f"background-color: {BG_INPUT}; color: {TEXT};")
+        layout.addWidget(self.out, 1)
+
+        close = QPushButton("Close")
+        close.clicked.connect(self.accept)
+        layout.addWidget(close)
+
+    def _browse(self):
+        d = QFileDialog.getExistingDirectory(self, "Select repository root")
+        if d:
+            self.g_root.setText(d)
+
+    def _save(self):
+        def _apply(c):
+            g = c.setdefault("git", {})
+            g["enabled"] = self.g_enabled.isChecked()
+            g["repo_root"] = self.g_root.text().strip() or None
+            g["allow_push"] = self.g_push.isChecked()
+            g["allow_pull"] = self.g_pull.isChecked()
+            g["allow_destructive"] = self.g_destructive.isChecked()
+            g["author_name"] = self.g_name.text().strip()
+            g["author_email"] = self.g_email.text().strip()
+        self.engine.config = _merge_save(_apply)
+        QMessageBox.information(self, "Kairos", "Git settings saved.")
+
+    def _run(self, op):
+        self.worker = GitWorker(self.engine, op)
+        self.worker.finished.connect(self.out.setPlainText)
+        self.worker.start()
+
+    def _commit(self):
+        msg = self.commit_msg.text().strip()
+        if not msg:
+            QMessageBox.warning(self, "Kairos", "Enter a commit message.")
+            return
+        self.worker = GitWorker(self.engine, "commit", message=msg, add_all=True)
+        self.worker.finished.connect(self.out.setPlainText)
+        self.worker.start()
+        self.commit_msg.clear()
+
+    def _new_branch(self):
+        name = self.branch_name.text().strip()
+        if not name:
+            return
+        self.worker = GitWorker(self.engine, "create_branch", name=name)
+        self.worker.finished.connect(self.out.setPlainText)
+        self.worker.start()
+        self.branch_name.clear()
+
+    def _checkout(self):
+        name = self.branch_name.text().strip()
+        if not name:
+            return
+        self.worker = GitWorker(self.engine, "checkout", name=name)
+        self.worker.finished.connect(self.out.setPlainText)
+        self.worker.start()
+        self.branch_name.clear()
+
+
+class WebhookDialog(QDialog):
+    """Configure the inbound/outbound webhook endpoint."""
+
+    def __init__(self, engine, parent=None):
+        super().__init__(parent)
+        import json as _json
+        self.engine = engine
+        self.setWindowTitle("Webhook Settings")
+        self.setStyleSheet(_dialog_style())
+        self.resize(680, 700)
+        cfg = engine.config.get("webhook", {}) or {}
+        out = cfg.get("outbound", {}) or {}
+        layout = QVBoxLayout(self)
+
+        inbound = QGroupBox("Inbound (external \u2192 Kairos)")
+        inf = QFormLayout(inbound)
+        self.w_enabled = QCheckBox("Enable webhook endpoint")
+        self.w_enabled.setChecked(bool(cfg.get("enabled")))
+        self.w_host = QLineEdit(cfg.get("host", "127.0.0.1"))
+        self.w_port = QLineEdit(str(cfg.get("port", 8765)))
+        self.w_sig = QCheckBox("Require HMAC signature (X-Kairos-Signature)")
+        self.w_sig.setChecked(bool(cfg.get("require_signature")))
+        self.w_public = QCheckBox("Allow non-loopback bind (unsafe)")
+        self.w_public.setChecked(bool(cfg.get("allow_public_bind")))
+        self.w_secret = QLineEdit()
+        self.w_secret.setEchoMode(QLineEdit.Password)
+        self.w_secret.setPlaceholderText("shared secret (stored in the OS keyring)")
+        self.hooks_edit = QTextEdit()
+        self.hooks_edit.setFont(QFont("Consolas", 9))
+        self.hooks_edit.setPlainText(_json.dumps(cfg.get("hooks", {}), indent=2))
+        inf.addRow(self.w_enabled)
+        inf.addRow("Host:", self.w_host)
+        inf.addRow("Port:", self.w_port)
+        inf.addRow(self.w_public)
+        inf.addRow(self.w_sig)
+        inf.addRow("Secret:", self.w_secret)
+        inf.addRow(QLabel("Hooks (JSON):"))
+        inf.addRow(self.hooks_edit)
+        layout.addWidget(inbound)
+
+        outbound = QGroupBox("Outbound (Kairos \u2192 URL)")
+        of = QFormLayout(outbound)
+        self.o_enabled = QCheckBox("Enable outbound notifications")
+        self.o_enabled.setChecked(bool(out.get("enabled")))
+        self.o_urls = QTextEdit()
+        self.o_urls.setFixedHeight(70)
+        self.o_urls.setPlainText("\n".join(out.get("urls", []) or []))
+        self.o_secret = QLineEdit()
+        self.o_secret.setEchoMode(QLineEdit.Password)
+        self.o_secret.setPlaceholderText("outbound signing secret (keyring)")
+        of.addRow(self.o_enabled)
+        of.addRow(QLabel("URLs (one per line):"), self.o_urls)
+        of.addRow("Secret:", self.o_secret)
+        test = QPushButton("Send test event")
+        test.clicked.connect(self._test)
+        of.addRow(test)
+        layout.addWidget(outbound)
+
+        hint = QLabel(f"Endpoint: POST http://{cfg.get('host','127.0.0.1')}:"
+                      f"{cfg.get('port',8765)}/hook/<name>  \u00b7  GET /health")
+        hint.setStyleSheet(f"color: {TEXT_GREY};")
+        layout.addWidget(hint)
+
+        btns = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+        btns.accepted.connect(self._save)
+        btns.rejected.connect(self.reject)
+        layout.addWidget(btns)
+
+    def _test(self):
+        self.worker = WebhookTestWorker(self.engine)
+        self.worker.finished.connect(lambda t: QMessageBox.information(self, "Webhook", t))
+        self.worker.start()
+
+    def _save(self):
+        import json as _json
+        import keyring
+        try:
+            port = int(self.w_port.text().strip() or 8765)
+        except ValueError:
+            QMessageBox.warning(self, "Kairos", "Port must be a number.")
+            return
+        try:
+            hooks = _json.loads(self.hooks_edit.toPlainText() or "{}")
+        except Exception as e:
+            QMessageBox.warning(self, "Kairos", f"Hooks JSON invalid: {e}")
+            return
+
+        def _apply(c):
+            w = c.setdefault("webhook", {})
+            w["enabled"] = self.w_enabled.isChecked()
+            w["host"] = self.w_host.text().strip() or "127.0.0.1"
+            w["port"] = port
+            w["require_signature"] = self.w_sig.isChecked()
+            w["allow_public_bind"] = self.w_public.isChecked()
+            w["hooks"] = hooks
+            o = w.setdefault("outbound", {})
+            o["enabled"] = self.o_enabled.isChecked()
+            o["urls"] = [u.strip() for u in self.o_urls.toPlainText().splitlines() if u.strip()]
+        self.engine.config = _merge_save(_apply)
+        if self.w_secret.text().strip():
+            try:
+                keyring.set_password("kairos", "webhook_secret", self.w_secret.text().strip())
+            except Exception:
+                pass
+        if self.o_secret.text().strip():
+            try:
+                keyring.set_password("kairos", "webhook_outbound_secret", self.o_secret.text().strip())
+            except Exception:
+                pass
+        self.engine.config = __import__("kairos.config", fromlist=["load_config"]).load_config()
+        QMessageBox.information(self, "Kairos", "Webhook settings saved. Restart Kairos to (re)start the endpoint.")
+        self.accept()
+
+
+class ArtifactsDialog(QDialog):
+    """Browse diagram/document artifacts and create new documents."""
+
+    def __init__(self, engine, parent=None):
+        super().__init__(parent)
+        self.engine = engine
+        self.setWindowTitle("Drawings & Documents")
+        self.setStyleSheet(_dialog_style())
+        self.resize(720, 560)
+        layout = QVBoxLayout(self)
+
+        row = QHBoxLayout()
+        refresh = QPushButton("Refresh")
+        refresh.clicked.connect(self._refresh)
+        open_btn = QPushButton("Open Selected")
+        open_btn.clicked.connect(self._open)
+        reveal = QPushButton("Reveal Folder")
+        reveal.clicked.connect(self._reveal)
+        row.addWidget(refresh)
+        row.addWidget(open_btn)
+        row.addWidget(reveal)
+        row.addStretch()
+        layout.addLayout(row)
+
+        self.list_widget = QListWidget()
+        layout.addWidget(self.list_widget, 1)
+
+        new_box = QGroupBox("New document")
+        nf = QVBoxLayout(new_box)
+        self.doc_name = QLineEdit()
+        self.doc_name.setPlaceholderText("filename (e.g. notes.md)")
+        self.doc_body = QTextEdit()
+        self.doc_body.setPlaceholderText("Document content\u2026")
+        self.doc_body.setFixedHeight(90)
+        save = QPushButton("Save Document")
+        save.clicked.connect(self._save_doc)
+        nf.addWidget(self.doc_name)
+        nf.addWidget(self.doc_body)
+        nf.addWidget(save)
+        layout.addWidget(new_box)
+
+        close = QPushButton("Close")
+        close.clicked.connect(self.accept)
+        layout.addWidget(close)
+        self._refresh()
+
+    def _refresh(self):
+        self.list_widget.clear()
+        try:
+            items = self.engine.list_artifacts()
+        except Exception as e:
+            self.list_widget.addItem(f"Unavailable: {e}")
+            return
+        for a in items:
+            self.list_widget.addItem(f"{a['name']}  ({a['size']} bytes)  {a['mtime'][:19]}")
+            self.list_widget.item(self.list_widget.count() - 1).setData(Qt.UserRole, a["path"])
+
+    def _selected_path(self):
+        item = self.list_widget.currentItem()
+        return item.data(Qt.UserRole) if item else None
+
+    def _open(self):
+        path = self._selected_path()
+        if not path:
+            QMessageBox.information(self, "Kairos", "Select an artifact first.")
+            return
+        _open_path(path)
+
+    def _reveal(self):
+        from pathlib import Path
+        try:
+            from kairos import artifacts
+            _open_path(str(artifacts._dir()))
+        except Exception as e:
+            QMessageBox.warning(self, "Kairos", str(e))
+
+    def _save_doc(self):
+        name = self.doc_name.text().strip()
+        if not name:
+            QMessageBox.warning(self, "Kairos", "Enter a filename.")
+            return
+        try:
+            path = self.engine.write_document(name, self.doc_body.toPlainText())
+            QMessageBox.information(self, "Kairos", f"Saved: {path}")
+            self.doc_name.clear()
+            self.doc_body.clear()
+            self._refresh()
+        except Exception as e:
+            QMessageBox.warning(self, "Kairos", f"Save failed: {e}")
+
+
+class DesignerDialog(QDialog):
+    """Drive a persistent headed browser toward a design goal (e.g. EasyEDA)."""
+
+    def __init__(self, engine, parent=None):
+        super().__init__(parent)
+        self.engine = engine
+        self.setWindowTitle("Web Designer (headed browser)")
+        self.setStyleSheet(_dialog_style())
+        self.resize(820, 640)
+        layout = QVBoxLayout(self)
+
+        note = QLabel("Requires Playwright Chromium and browser.enabled = true. "
+                      "Enable JS evaluation (browser.allow_js_eval) to let the "
+                      "agent call the editor's own API.")
+        note.setWordWrap(True)
+        note.setStyleSheet(f"color: {TEXT_GREY};")
+        layout.addWidget(note)
+
+        url_row = QHBoxLayout()
+        url_row.addWidget(QLabel("Start URL:"))
+        self.url_edit = QLineEdit("https://easyeda.com/editor")
+        url_row.addWidget(self.url_edit, 1)
+        open_btn = QPushButton("Open Session")
+        open_btn.clicked.connect(self._open)
+        url_row.addWidget(open_btn)
+        layout.addLayout(url_row)
+
+        layout.addWidget(QLabel("Design goal:"))
+        self.goal_edit = QTextEdit()
+        self.goal_edit.setPlaceholderText(
+            "e.g. On EasyEDA, create a schematic with an ESP32-S3, a 3.3V regulator, "
+            "and a USB-C connector, then place and label the components.")
+        self.goal_edit.setFixedHeight(80)
+        layout.addWidget(self.goal_edit)
+
+        self.run_btn = QPushButton("Run Design Task")
+        self.run_btn.setStyleSheet(f"background-color: {GREEN_DIM}; color: {BG_DARK}; font-weight: bold;")
+        self.run_btn.clicked.connect(self._run)
+        layout.addWidget(self.run_btn)
+
+        self.status = QLabel("")
+        self.status.setStyleSheet(f"color: {TEXT_GREY};")
+        layout.addWidget(self.status)
+
+        self.out = QTextBrowser()
+        self.out.setStyleSheet(f"background-color: {BG_INPUT}; color: {TEXT};")
+        layout.addWidget(self.out, 1)
+
+        close = QPushButton("Close")
+        close.clicked.connect(self.accept)
+        layout.addWidget(close)
+
+    def _open(self):
+        url = self.url_edit.text().strip()
+        self.status.setText("Opening session (a Chromium window should appear)\u2026")
+        self.worker = BrowserOpenWorker(self.engine, url)
+        self.worker.finished.connect(lambda t: (self.status.setText("Session open."),
+                                                 self.out.setPlainText(t)))
+        self.worker.start()
+
+    def _run(self):
+        goal = self.goal_edit.toPlainText().strip()
+        if not goal:
+            QMessageBox.warning(self, "Kairos", "Enter a design goal.")
+            return
+        url = self.url_edit.text().strip()
+        self.run_btn.setEnabled(False)
+        self.status.setText("Running design task\u2026")
+        self.out.clear()
+        self.worker = DesignWorker(self.engine, goal, url)
+        self.worker.progress.connect(lambda t: self.status.setText(t))
+        self.worker.finished.connect(self._done)
+        self.worker.failed.connect(self._failed)
+        self.worker.start()
+
+    def _done(self, res):
+        self.run_btn.setEnabled(True)
+        self.status.setText("Done.")
+        self.out.setPlainText(str(res.get("result", res)))
+
+    def _failed(self, msg):
+        self.run_btn.setEnabled(True)
+        self.status.setText("Failed.")
+        self.out.setPlainText(f"[Error] {msg}")
+
+
+def _open_path(path):
+    import os
+    import sys
+    try:
+        if sys.platform == "win32":
+            os.startfile(path)  # noqa: S606
+        else:
+            import webbrowser
+            webbrowser.open("file://" + os.path.abspath(path))
+    except Exception as e:
+        QMessageBox.warning(None, "Kairos", f"Could not open {path}: {e}")
 
 

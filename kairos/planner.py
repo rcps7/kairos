@@ -16,6 +16,26 @@ logger = logging.getLogger(__name__)
 
 DB_PATH = Path.home() / ".kairos" / "planner.db"
 
+# Prompt templates used by the engine's Plan/Execute modes.
+PLANNER_SYSTEM = (
+    "You are a planning engine. Decompose the user's goal into a short, ordered "
+    "list of concrete, independently executable steps. Reply with ONLY a JSON "
+    "array of step strings (3-10 steps) and nothing else — no prose, no code "
+    "fences. Each step must be a single actionable instruction."
+)
+
+EXECUTOR_SYSTEM = (
+    "You are executing one step of a larger plan. Complete ONLY the current step "
+    "and report the concrete result. Use the available tools when needed. Be "
+    "concise and factual; state clearly if the step cannot be completed."
+)
+
+
+def plan_prompt(goal: str, context: str = "") -> str:
+    ctx = f"\n\nCONTEXT:\n{context[:4000]}" if context else ""
+    return (f"GOAL:\n{goal}{ctx}\n\n"
+            "Return the JSON array of steps now, and nothing else.")
+
 
 class PlannerStore:
     def __init__(self, db_path=None):

@@ -95,6 +95,37 @@ TOOL_SCHEMAS = [
         "analyst, writer, planner).",
         {"agent": {"type": "string"}, "task": {"type": "string"}},
         ["agent", "task"]),
+    _fn("git_status", "Show the git working-tree status of the configured repository.",
+        {}, []),
+    _fn("git_diff", "Show the git diff (unstaged, or staged when staged=true).",
+        {"staged": {"type": "boolean"}, "ref": {"type": "string"}}, []),
+    _fn("git_log", "Show recent git commits.",
+        {"n": {"type": "integer"}}, []),
+    _fn("git_commit", "Stage all changes and create a git commit.",
+        {"message": {"type": "string"}, "add_all": {"type": "boolean"}}, ["message"]),
+    _fn("git_create_branch", "Create (and optionally check out) a git branch.",
+        {"name": {"type": "string"}, "checkout": {"type": "boolean"}}, ["name"]),
+    _fn("git_checkout", "Check out an existing git branch.",
+        {"name": {"type": "string"}}, ["name"]),
+    _fn("write_document", "Write a text/markdown/code document to the artifacts folder.",
+        {"name": {"type": "string"}, "content": {"type": "string"},
+         "fmt": {"type": "string"}}, ["name", "content"]),
+    _fn("draw_diagram", "Draw a diagram (svg/bar/line/flowchart) and save it as an artifact.",
+        {"kind": {"type": "string"}, "name": {"type": "string"},
+         "title": {"type": "string"}, "svg": {"type": "string"},
+         "labels": {"type": "array", "items": {"type": "string"}},
+         "values": {"type": "array", "items": {"type": "number"}},
+         "nodes": {"type": "array", "items": {"type": "string"}},
+         "edges": {"type": "array", "items": {"type": "array"}}},
+        ["kind", "name"]),
+    _fn("browser_open", "Open a persistent browser session (headed) and return page text.",
+        {"url": {"type": "string"}}, ["url"]),
+    _fn("browser_js", "Evaluate JavaScript in the persistent browser session (gated).",
+        {"script": {"type": "string"}, "url": {"type": "string"}}, ["script"]),
+    _fn("browser_mouse", "Click/type at coordinates or a selector in the browser session.",
+        {"action": {"type": "string"}, "selector": {"type": "string"},
+         "x": {"type": "number"}, "y": {"type": "number"},
+         "text": {"type": "string"}}, ["action"]),
 ]
 
 _CAP = {
@@ -124,6 +155,17 @@ _CAP = {
     "computer_task": "learn_web",
     "google_search": None,
     "delegate": None,
+    "git_status": "git_ops",
+    "git_diff": "git_ops",
+    "git_log": "git_ops",
+    "git_commit": "git_ops",
+    "git_create_branch": "git_ops",
+    "git_checkout": "git_ops",
+    "write_document": "artifacts",
+    "draw_diagram": "artifacts",
+    "browser_open": "browser_control",
+    "browser_js": "browser_control",
+    "browser_mouse": "browser_control",
 }
 
 
@@ -149,6 +191,11 @@ def _confine(path: str) -> str:
     return target
 
 
+def capability_for(name: str):
+    """Return the capability required for a tool (or None if unrestricted)."""
+    return _CAP.get(name)
+
+
 def available_tools(engine) -> list:
     out = []
     for t in TOOL_SCHEMAS:
@@ -169,6 +216,15 @@ def available_tools(engine) -> list:
 
 def execute(engine, name: str, args: dict) -> str:
     args = args or {}
+    cap = _CAP.get(name)
+    if cap is not None and hasattr(engine, "can"):
+        try:
+            ok = engine.can(cap)
+        except Exception:
+            ok = True
+        if not ok:
+            raise PermissionError(
+                f"Capability '{cap}' is not permitted for the active character.")
     if name == "web_search":
         results = engine.search_web(args.get("query", ""),
                                    max_results=int(args.get("max_results", 8)))
@@ -272,4 +328,41 @@ def execute(engine, name: str, args: dict) -> str:
     if name.startswith("mcp__"):
         from kairos import mcp_client
         return mcp_client.call(name, args)
+    if name.startswith("git_"):
+        from kairos import git_tool
+        if name == "git_status":
+            return git_tool.status()
+        if name == "git_diff":
+            return git_tool.diff(staged=bool(args.get("staged")), ref=args.get("ref"))
+        if name == "git_log":
+            return git_tool.log(int(args.get("n", 20)))
+        if name == "git_commit":
+            return git_tool.commit(args.get("message", ""),
+                                   add_all=bool(args.get("add_all", True)))
+        if name == "git_create_branch":
+            return git_tool.create_branch(name=args.get("name", ""),
+                                          checkout=bool(args.get("checkout", True)))
+        if name == "git_checkout":
+            return git_tool.checkout(name=args.get("name", ""))
+    if name == "write_document":
+        return "Saved: " + engine.write_document(
+            args.get("name", "document"), args.get("content", ""), args.get("fmt"))
+    if name == "draw_diagram":
+        return "Saved: " + engine.draw_diagram(
+            args.get("kind", "svg"), args.get("name", "diagram"),
+            svg=args.get("svg", ""), title=args.get("title", ""),
+            labels=args.get("labels"), values=args.get("values"),
+            nodes=args.get("nodes"), edges=args.get("edges"))
+    if name == "browser_open":
+        from kairos import browser
+        return browser.session_open(args.get("url", ""))
+    if name == "browser_js":
+        from kairos import browser
+        return browser.session_eval_js(args.get("script", ""), url=args.get("url"))
+    if name == "browser_mouse":
+        from kairos import browser
+        return browser.session_mouse(action=args.get("action", ""),
+                                     selector=args.get("selector", ""),
+                                     x=args.get("x"), y=args.get("y"),
+                                     text=args.get("text", ""))
     raise PermissionError(f"Unknown or disallowed tool '{name}'.")

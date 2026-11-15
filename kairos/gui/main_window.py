@@ -372,9 +372,15 @@ class KairosGUI(QMainWindow):
         edit_menu.addAction("Agent Character\u2026", self.open_character_dialog)
         edit_menu.addAction("Knowledge Graph\u2026", self.open_graph_dialog)
         edit_menu.addAction("Pending Knowledge\u2026", self.open_pending_dialog)
+        edit_menu.addSeparator()
+        self._git_action = edit_menu.addAction("Git & Version Control\u2026", self.open_git_dialog)
+        self._webhook_action = edit_menu.addAction("Webhook\u2026", self.open_webhook_dialog)
 
         tools_menu = menubar.addMenu("&Tools")
         tools_menu.addAction("Predictive Engine", self.open_predict_dialog)
+        self._designer_action = tools_menu.addAction("Web Designer (browser)\u2026",
+                                                     self.open_designer_dialog)
+        tools_menu.addAction("Drawings & Documents\u2026", self.open_artifacts_dialog)
 
         collab_menu = menubar.addMenu("&Collaborate")
         collab_menu.addAction("My Call Sign\u2026", self.open_my_callsign_dialog)
@@ -752,6 +758,31 @@ class KairosGUI(QMainWindow):
         council_row.addWidget(self.attachments_label)
         layout.addLayout(council_row)
 
+        # --- Mode controls: Chat (independent button) + Plan/Execute dropdown ---
+        mode_row = QHBoxLayout()
+        mode_lbl = QLabel("Mode:")
+        mode_lbl.setStyleSheet(f"color: {TEXT_GREY}; font-family: 'Segoe UI', sans-serif;")
+        mode_row.addWidget(mode_lbl)
+        self.chat_mode_btn = QPushButton("Chat")
+        self.chat_mode_btn.setCheckable(True)
+        self.chat_mode_btn.setChecked(True)
+        self.chat_mode_btn.setToolTip("Normal chat (default)")
+        self.chat_mode_btn.clicked.connect(self._select_chat_mode)
+        mode_row.addWidget(self.chat_mode_btn)
+        self.mode_combo = QComboBox()
+        self.mode_combo.addItem("Plan", "plan")
+        self.mode_combo.addItem("Execute", "execute")
+        self.mode_combo.setToolTip("Plan: produce a durable plan only. "
+                                   "Execute: plan, then autonomously run the steps.")
+        self.mode_combo.currentIndexChanged.connect(self._select_agent_mode)
+        mode_row.addWidget(self.mode_combo)
+        self.mode_hint = QLabel("")
+        self.mode_hint.setStyleSheet(f"color: {GREEN_DIM}; font-family: 'Segoe UI', sans-serif;")
+        mode_row.addWidget(self.mode_hint)
+        mode_row.addStretch()
+        layout.addLayout(mode_row)
+        self._sync_mode_from_config()
+
         input_row = QHBoxLayout()
         self.chat_input = QLineEdit()
         self.chat_input.setPlaceholderText("Type your instruction here...")
@@ -782,6 +813,57 @@ class KairosGUI(QMainWindow):
         self.refresh_council_members()
         for combo in self.member_combos:
             combo.setEnabled(checked)
+
+    # --- Mode selection (Chat button + Plan/Execute dropdown) ---
+    def _sync_mode_from_config(self):
+        try:
+            mode = self.engine.get_mode()
+        except Exception:
+            mode = "chat"
+        self.mode_combo.blockSignals(True)
+        if mode in ("plan", "execute"):
+            idx = self.mode_combo.findData(mode)
+            if idx >= 0:
+                self.mode_combo.setCurrentIndex(idx)
+            self.chat_mode_btn.setChecked(False)
+            self.mode_combo.setEnabled(True)
+        else:
+            mode = "chat"
+            self.chat_mode_btn.setChecked(True)
+            self.mode_combo.setEnabled(False)
+        self.mode_combo.blockSignals(False)
+        self._set_mode_hint(mode)
+
+    def _set_mode_hint(self, mode):
+        labels = {"chat": "Chat", "plan": "Plan mode", "execute": "Execute mode"}
+        try:
+            self.mode_hint.setText(labels.get(mode, ""))
+        except Exception:
+            pass
+
+    def _select_chat_mode(self):
+        self.chat_mode_btn.setChecked(True)
+        self.mode_combo.setEnabled(False)
+        self._set_mode_hint("chat")
+        try:
+            self.engine.set_mode("chat")
+        except Exception:
+            pass
+
+    def _select_agent_mode(self, _idx=None):
+        mode = self.mode_combo.currentData() or "plan"
+        self.chat_mode_btn.setChecked(False)
+        self.mode_combo.setEnabled(True)
+        self._set_mode_hint(mode)
+        try:
+            self.engine.set_mode(mode)
+        except Exception:
+            pass
+
+    def _current_mode(self):
+        if self.chat_mode_btn.isChecked():
+            return "chat"
+        return self.mode_combo.currentData() or "chat"
 
     def refresh_council_members(self):
         """Repopulate the council member dropdowns from configured providers."""
@@ -961,6 +1043,18 @@ class KairosGUI(QMainWindow):
             pass
         try:
             self._peripheral_action.setEnabled(allowed("peripherals"))
+        except Exception:
+            pass
+        try:
+            self._git_action.setEnabled(allowed("git_ops"))
+        except Exception:
+            pass
+        try:
+            self._webhook_action.setEnabled(allowed("webhook"))
+        except Exception:
+            pass
+        try:
+            self._designer_action.setEnabled(allowed("browser_control"))
         except Exception:
             pass
 
@@ -1183,6 +1277,18 @@ class KairosGUI(QMainWindow):
                                     progress=lambda t: emit_progress(t))
         return run
 
+    def _submit_agent_job(self, text, mode, attachments):
+        """Queue a Plan or Execute job (runs through the FIFO queue)."""
+        label = "Plan" if mode == "plan" else "Execute"
+
+        def run(emit_chunk, emit_progress):
+            res = self.engine.run_agent(
+                text, mode=mode, attachment_paths=attachments,
+                progress=lambda t: emit_progress(t))
+            return res.get("text", "")
+
+        self._submit_job(run, label, pending=f"{label}...", kind="chat")
+
     def send_message(self):
         text = self.chat_input.text().strip()
         if not text and not self.attachments:
@@ -1190,6 +1296,7 @@ class KairosGUI(QMainWindow):
         if self.council_check.isChecked():
             self._send_council(text)
             return
+        mode = self._current_mode()
         attachments = list(self.attachments)
         self._append_bubble("You", text or "(attachments)", "user", "#58a6ff")
         if attachments:
@@ -1197,9 +1304,12 @@ class KairosGUI(QMainWindow):
             self.attachments = []
             self._update_attachment_label()
         self.chat_input.clear()
-        self._submit_job(self._chat_runner(text, attachments), "Kairos",
-                         pending="...", kind="chat",
-                         voice=getattr(self, "_voice_reply", False))
+        if mode == "chat":
+            self._submit_job(self._chat_runner(text, attachments), "Kairos",
+                             pending="...", kind="chat",
+                             voice=getattr(self, "_voice_reply", False))
+            return
+        self._submit_agent_job(text, mode, attachments)
 
     def _send_council(self, text):
         members = [c.currentData() or c.currentText() for c in self.member_combos if (c.currentData() or c.currentText())]
@@ -1440,6 +1550,20 @@ class KairosGUI(QMainWindow):
         PendingDialog(self.engine, self).exec()
         self._last_pending = self.engine.graph_pending_count()
         self._check_pending_knowledge()
+
+    def open_git_dialog(self):
+        GitDialog(self.engine, self).exec()
+
+    def open_webhook_dialog(self):
+        WebhookDialog(self.engine, self).exec()
+        from kairos.config import load_config
+        self.engine.config = load_config()
+
+    def open_designer_dialog(self):
+        DesignerDialog(self.engine, self).exec()
+
+    def open_artifacts_dialog(self):
+        ArtifactsDialog(self.engine, self).exec()
 
     def _check_pending_knowledge(self):
         try:

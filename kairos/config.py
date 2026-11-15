@@ -83,6 +83,7 @@ DEFAULT_CONFIG = {
     "agent": {
         "native_tools": False,
         "streaming": True,
+        "mode": "chat",
         "file_root": None,
         "allow_file_write": True,
         "allow_shell": False,
@@ -97,6 +98,43 @@ DEFAULT_CONFIG = {
             "model": ""
         }
     },
+    "git": {
+        "enabled": False,
+        "repo_root": None,
+        "allow_push": False,
+        "allow_pull": False,
+        "allow_destructive": False,
+        "author_name": "",
+        "author_email": "",
+        "token": None
+    },
+    "webhook": {
+        "enabled": False,
+        "host": "127.0.0.1",
+        "port": 8765,
+        "allow_public_bind": False,
+        "secret": None,
+        "require_signature": False,
+        "hooks": {},
+        "outbound": {
+            "enabled": False,
+            "urls": [],
+            "secret": None
+        }
+    },
+    "browser": {
+        "enabled": False,
+        "headless": False,
+        "profile_dir": None,
+        "allow_js_eval": False,
+        "viewport": {"width": 1280, "height": 800},
+        "slow_mo": 0
+    },
+    "artifacts": {
+        "enabled": True,
+        "allow_svg": True,
+        "max_bytes": 2000000
+    },
     "scheduler": {
         "enabled": True,
         "poll_seconds": 5
@@ -107,7 +145,12 @@ DEFAULT_CONFIG = {
     },
     "mcp": {
         "enabled": False,
-        "servers": {}
+        "servers": {},
+        "server": {
+            "enabled": False,
+            "expose_resources": True,
+            "expose_prompts": True
+        }
     },
     "connectors": {
         "github": {"enabled": False, "token": None},
@@ -192,6 +235,17 @@ def load_config() -> dict:
                 except Exception:
                     pass
 
+    webhook = cfg.setdefault("webhook", {})
+    if not webhook.get("secret"):
+        webhook["secret"] = _keyring_get("webhook_secret")
+    wh_out = webhook.setdefault("outbound", {})
+    if not wh_out.get("secret"):
+        wh_out["secret"] = _keyring_get("webhook_outbound_secret")
+
+    gitcfg = cfg.setdefault("git", {})
+    if not gitcfg.get("token"):
+        gitcfg["token"] = _keyring_get("git_token")
+
     return cfg
 
 
@@ -225,5 +279,22 @@ def save_config(cfg: dict):
         addr = (email.get("email") or "").strip()
         if epwd and addr and not _keyring_set(f"email_password_{addr}", epwd):
             logger.warning("Keyring unavailable; email password not written to disk.")
+
+        webhook = cfg.setdefault("webhook", {})
+        wsecret = webhook.get("secret")
+        webhook["secret"] = None
+        if wsecret and not _keyring_set("webhook_secret", wsecret):
+            logger.warning("Keyring unavailable; webhook secret not written to disk.")
+        wh_out = webhook.setdefault("outbound", {})
+        osecret = wh_out.get("secret")
+        wh_out["secret"] = None
+        if osecret and not _keyring_set("webhook_outbound_secret", osecret):
+            logger.warning("Keyring unavailable; outbound webhook secret not written to disk.")
+
+        gitcfg = cfg.setdefault("git", {})
+        gtoken = gitcfg.get("token")
+        gitcfg["token"] = None
+        if gtoken and not _keyring_set("git_token", gtoken):
+            logger.warning("Keyring unavailable; git token not written to disk.")
 
         _write_raw(cfg)

@@ -248,3 +248,73 @@ class PredictWorker(QThread):
             self.error.emit(str(e))
 
 
+class GitWorker(QThread):
+    finished = Signal(str)
+
+    def __init__(self, engine, op, **kwargs):
+        super().__init__()
+        self.engine = engine
+        self.op = op
+        self.kwargs = kwargs
+
+    def run(self):
+        try:
+            fn = getattr(self.engine, f"git_{self.op}")
+            self.finished.emit(str(fn(**self.kwargs)))
+        except Exception as e:
+            self.finished.emit(f"[Error] {e}")
+
+
+class WebhookTestWorker(QThread):
+    finished = Signal(str)
+
+    def __init__(self, engine):
+        super().__init__()
+        self.engine = engine
+
+    def run(self):
+        try:
+            from kairos.webhook import WebhookManager
+            cfg = self.engine.config.get("webhook", {}) or {}
+            mgr = WebhookManager(self.engine, cfg)
+            mgr.notify("test", {"hello": "world"})
+            self.finished.emit("Outbound test event dispatched (if outbound is enabled).")
+        except Exception as e:
+            self.finished.emit(f"[Error] {e}")
+
+
+class DesignWorker(QThread):
+    progress = Signal(str)
+    finished = Signal(dict)
+    failed = Signal(str)
+
+    def __init__(self, engine, goal, url):
+        super().__init__()
+        self.engine = engine
+        self.goal = goal
+        self.url = url
+
+    def run(self):
+        try:
+            res = self.engine.design_task(self.goal, url=self.url,
+                                          progress=lambda t: self.progress.emit(t))
+            self.finished.emit(res)
+        except Exception as e:
+            self.failed.emit(str(e))
+
+
+class BrowserOpenWorker(QThread):
+    finished = Signal(str)
+
+    def __init__(self, engine, url):
+        super().__init__()
+        self.engine = engine
+        self.url = url
+
+    def run(self):
+        try:
+            self.finished.emit(self.engine.browser_session_open(self.url))
+        except Exception as e:
+            self.finished.emit(f"[Error] {e}")
+
+

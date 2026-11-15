@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 import re
 import threading
 
@@ -82,6 +83,15 @@ class TelegramBot:
                 ("newplan", self.newplan_command),
                 ("plan", self.plan_command),
                 ("image", self.image_command),
+                ("git", self.git_command),
+                ("webhooks", self.webhooks_command),
+                ("write", self.write_command),
+                ("draw", self.draw_command),
+                ("artifacts", self.artifacts_command),
+                ("mode", self.mode_command),
+                ("execute", self.execute_command),
+                ("planagent", self.planagent_command),
+                ("design", self.design_command),
                 ("kill", self.kill_command),
             ]
             for name, handler in commands:
@@ -354,6 +364,15 @@ class TelegramBot:
             "/graph <query> - search the knowledge graph\n"
             "/pending - review proposed knowledge\n"
             "/graphdel <id> - delete a graph entity\n"
+            "/mode chat|plan|execute - set the agent mode\n"
+            "/planagent <goal> - produce a durable plan\n"
+            "/execute <goal> - plan and autonomously run the steps\n"
+            "/git status|diff|log|commit <msg> - git workflows\n"
+            "/write <file> | <content> - save a document\n"
+            "/draw <name> | <desc> - draw an SVG diagram\n"
+            "/design <url> | <goal> - drive a browser to design a page\n"
+            "/webhooks - show webhook config\n"
+            "/artifacts - list drawings & documents\n"
             "/whoami - show your Telegram user ID"
         )
 
@@ -846,6 +865,168 @@ class TelegramBot:
             await update.message.reply_text(f"Image error: {e}")
             return
         await update.message.reply_text(f"Image saved: {path}")
+
+    async def git_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        denied = self._capability_denied("git_ops")
+        if denied:
+            await update.message.reply_text(denied)
+            return
+        args = context.args or []
+        if not args:
+            await update.message.reply_text(
+                "Usage: /git status|diff|log|branches|commit <msg>|branch <name>|"
+                "checkout <name>|pull|push")
+            return
+        sub = args[0].lower()
+        rest = " ".join(args[1:]).strip()
+        try:
+            if sub == "status":
+                out = await asyncio.to_thread(self.engine.git_status)
+            elif sub == "diff":
+                out = await asyncio.to_thread(self.engine.git_diff)
+            elif sub == "log":
+                out = await asyncio.to_thread(self.engine.git_log)
+            elif sub == "branches":
+                out = await asyncio.to_thread(self.engine.git_branches)
+            elif sub == "commit":
+                if not rest:
+                    await update.message.reply_text("Usage: /git commit <message>")
+                    return
+                out = await asyncio.to_thread(self.engine.git_commit, rest)
+            elif sub == "branch":
+                out = await asyncio.to_thread(self.engine.git_create_branch, rest)
+            elif sub == "checkout":
+                out = await asyncio.to_thread(self.engine.git_checkout, rest)
+            elif sub == "pull":
+                out = await asyncio.to_thread(self.engine.git_pull)
+            elif sub == "push":
+                out = await asyncio.to_thread(self.engine.git_push)
+            else:
+                out = f"Unknown subcommand '{sub}'."
+        except Exception as e:
+            out = f"Git error: {e}"
+        await update.message.reply_text(str(out)[:3800])
+
+    async def webhooks_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        cfg = self.engine.config.get("webhook", {}) or {}
+        hooks = cfg.get("hooks", {}) or {}
+        lines = [f"Webhook endpoint: {'enabled' if cfg.get('enabled') else 'disabled'} "
+                 f"({cfg.get('host', '127.0.0.1')}:{cfg.get('port', 8765)})"]
+        if hooks:
+            for name, h in hooks.items():
+                flag = "enabled" if h.get("enabled", True) else "disabled"
+                lines.append(f"- {name}: {h.get('action', 'ask')} ({flag})")
+        else:
+            lines.append("(no hooks configured)")
+        await update.message.reply_text("\n".join(lines)[:3800])
+
+    async def write_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        denied = self._capability_denied("artifacts")
+        if denied:
+            await update.message.reply_text(denied)
+            return
+        raw = " ".join(context.args)
+        if "|" not in raw:
+            await update.message.reply_text("Usage: /write <filename> | <content>")
+            return
+        name, content = raw.split("|", 1)
+        try:
+            path = await asyncio.to_thread(self.engine.write_document,
+                                           name.strip() or "document", content.strip())
+            out = f"Saved: {path}"
+        except Exception as e:
+            out = f"Write error: {e}"
+        await update.message.reply_text(str(out)[:3800])
+
+    async def draw_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        denied = self._capability_denied("artifacts")
+        if denied:
+            await update.message.reply_text(denied)
+            return
+        raw = " ".join(context.args)
+        if "|" not in raw:
+            await update.message.reply_text(
+                "Usage: /draw <name> | <svg markup or a description of the diagram>")
+            return
+        name, spec = raw.split("|", 1)
+        name = name.strip() or "diagram"
+        spec = spec.strip()
+        try:
+            if "<svg" in spec.lower():
+                path = await asyncio.to_thread(self.engine.draw_diagram, "svg", name, svg=spec)
+            else:
+                prompt = ("Produce ONLY valid SVG markup (a complete <svg> element, no "
+                          "markdown fences) for: " + spec)
+                svg = await asyncio.to_thread(self.engine.ask_llm, prompt)
+                path = await asyncio.to_thread(self.engine.draw_diagram, "svg", name, svg=svg)
+            await update.message.reply_text(f"Saved: {path}"[:3800])
+            try:
+                if os.path.exists(path):
+                    with open(path, "rb") as f:
+                        await update.message.reply_document(f, filename=os.path.basename(path))
+            except Exception:
+                pass
+        except Exception as e:
+            await update.message.reply_text(f"Draw error: {e}")
+
+    async def artifacts_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        items = await asyncio.to_thread(self.engine.list_artifacts, 30)
+        if not items:
+            await update.message.reply_text("No artifacts yet.")
+            return
+        lines = ["Artifacts:"] + [f"- {a['name']} ({a['size']} bytes)" for a in items]
+        await update.message.reply_text("\n".join(lines)[:3800])
+
+    async def mode_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not context.args:
+            await update.message.reply_text(
+                f"Current mode: {self.engine.get_mode()}. Usage: /mode chat|plan|execute")
+            return
+        mode = await asyncio.to_thread(self.engine.set_mode, context.args[0])
+        await update.message.reply_text(f"Mode set to '{mode}'.")
+
+    async def execute_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        goal = " ".join(context.args).strip()
+        if not goal:
+            await update.message.reply_text("Usage: /execute <goal>")
+            return
+        await update.message.reply_text("Planning and executing...")
+        try:
+            res = await asyncio.to_thread(self.engine.run_agent, goal, "execute")
+            out = res.get("text", "")
+        except Exception as e:
+            out = f"Error: {e}"
+        await update.message.reply_text(str(out)[:3800] or "(no output)")
+
+    async def planagent_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        goal = " ".join(context.args).strip()
+        if not goal:
+            await update.message.reply_text("Usage: /planagent <goal>")
+            return
+        try:
+            res = await asyncio.to_thread(self.engine.run_agent, goal, "plan")
+            out = res.get("text", "")
+        except Exception as e:
+            out = f"Error: {e}"
+        await update.message.reply_text(str(out)[:3800] or "(no output)")
+
+    async def design_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        denied = self._capability_denied("browser_control")
+        if denied:
+            await update.message.reply_text(denied)
+            return
+        raw = " ".join(context.args)
+        if "|" not in raw:
+            await update.message.reply_text("Usage: /design <url> | <goal>")
+            return
+        url, goal = raw.split("|", 1)
+        await update.message.reply_text("Driving the browser (this may take a while)...")
+        try:
+            res = await asyncio.to_thread(self.engine.design_task, goal.strip(), url.strip())
+            out = res.get("result", str(res))
+        except Exception as e:
+            out = f"Error: {e}"
+        await update.message.reply_text(str(out)[:3800] or "(no output)")
 
     async def kill_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Confirm before engaging the kill switch."""
