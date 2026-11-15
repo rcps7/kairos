@@ -54,6 +54,7 @@ DEFAULT_CONFIG = {
         "enabled": True,
         "db_path": None,
         "backfilled": False,
+        "auto_repair": True,
         "require_approval": True,
         "auto_approve": False,
         "extract_on_chat": True,

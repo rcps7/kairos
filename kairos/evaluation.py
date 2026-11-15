@@ -120,6 +120,19 @@ def _check_mcp_extras():
     assert "make_plan" in [p["name"] for p in mcp_server._prompt_defs()]
 
 
+def _check_graph_recovery():
+    import tempfile
+    from pathlib import Path
+    from kairos import graph_memory
+    assert graph_memory._is_wal_error("Corrupted wal file")
+    d = Path(tempfile.mkdtemp())
+    (d / "g.lbdb").write_bytes(b"db")
+    (d / "g.lbdb.wal").write_bytes(b"wal")
+    res = graph_memory.quarantine_wal(str(d / "g.lbdb"))
+    assert res["backup"] and res["quarantined"]
+    assert (d / "g.lbdb").exists() and not (d / "g.lbdb.wal").exists()
+
+
 def _check_release_signing():
     from cryptography.hazmat.primitives import serialization
     from kairos import release_signing
@@ -161,6 +174,7 @@ CHECKS = [
     ("artifacts", _check_artifacts),
     ("modes", _check_modes),
     ("mcp extras", _check_mcp_extras),
+    ("graph recovery", _check_graph_recovery),
 ]
 
 

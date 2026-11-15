@@ -1,6 +1,6 @@
 # KAIROS Roadmap
 
-Current version: **0.16.0** · License: MIT (PolyForm Noncommercial for the app) ·
+Current version: **0.16.1** · License: MIT (PolyForm Noncommercial for the app) ·
 Repo: https://github.com/rcps7/kairos
 
 This document tracks shipped functionality and the forward plan. Each release is
@@ -9,7 +9,7 @@ published on GitHub Releases with a **signed** `KAIROS-agent-bundle.zip` (plus
 digest and the Ed25519 signature against the pinned public key.
 
 Verification gates for every release: `python -m compileall kairos`,
-`python -m kairos.evaluation` (17/17) and `python -m pytest -q tests` (74 passing).
+`python -m kairos.evaluation` (18/18) and `python -m pytest -q tests` (77 passing).
 
 ---
 
@@ -51,6 +51,7 @@ Verification gates for every release: `python -m compileall kairos`,
 | 0.14.2 | Streaming tools | Streamed replies now execute tool requests (search/learn/scrape) instead of printing raw tool markup; parser also accepts `web_search("...")` form. |
 | 0.15.0 | Concurrency | FIFO job queue (`kairos/jobs.py`): chat, skills and background actions run one-at-a-time without freezing the UI; per-thread chat guard; skills run off the UI thread; thread-local token usage; provider-call gate. |
 | 0.16.0 | Workflows & web | **Plan/Execute modes** (Chat button + Plan/Execute dropdown; durable plans + autonomous step execution over the full toolkit). **Git workflows** (`git_tool.py`, system git, confined, opt-in push/pull). **Webhooks** (`webhook.py`: inbound triggers + outbound notifications, loopback `127.0.0.1:8765`, token/HMAC). **Draw & write** (`artifacts.py`: sanitized SVG diagrams + documents). **Web-page design** — persistent headed Playwright session with JS/mouse control (`browser.py`, `computer.py`) for editors like EasyEDA. **MCP server** now exposes resources & prompts and runs a headless engine (no PID/heartbeat/scheduler clash). |
+| 0.16.1 | Graph recovery | Non-destructive knowledge-graph repair: `graph_memory.quarantine_wal` (backup + quarantine a corrupt WAL), auto-repair on startup (`graph_memory.auto_repair`), GUI **Repair / Rebuild**, Telegram `/graphrepair`, CLI `python -m kairos.graph_memory diagnose\|recover\|rebuild`. Source data (`knowledge.db`, `graph_pending.db`) is never touched. |
 
 Plan A is **fully complete**; Plan B's wave backlog is **fully complete**.
 
@@ -128,8 +129,8 @@ Features that are shipped but need local setup; all are **off by default**:
   usage, SQL, MCP (client + server + resources/prompts), connectors, image, Discord,
   sub-agents, signing, GUI split, computer-use, RAG rerank, streaming tool loop,
   FIFO job queue, per-thread chat concurrency, **git tool, webhook, artifacts,
-  chat modes**. 
-- `python -m kairos.evaluation` — 17 offline smoke checks.
+  chat modes, graph WAL recovery**. 
+- `python -m kairos.evaluation` — 18 offline smoke checks.
 - CI: `.github/workflows/ci.yml` (Ubuntu + Windows; Python 3.10/3.12; compile + tests).
 
 ---

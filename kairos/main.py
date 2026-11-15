@@ -420,6 +420,7 @@ class KairosEngine:
                 db_path,
                 embed_fn=self._graph_embed_fn(),
                 dedup_distance=float(cfg.get("dedup_distance", 0.15)),
+                auto_repair=bool(cfg.get("auto_repair", True)),
             )
             if not self.graph.available:
                 logger.warning("Graph memory unavailable: %s", self.graph.error)
@@ -696,6 +697,39 @@ class KairosEngine:
 
     def graph_clear(self) -> bool:
         return self.graph.clear() if self.graph else False
+
+    def repair_graph(self) -> dict:
+        """Quarantine a corrupt graph WAL (backup kept) and reopen the graph.
+
+        The database file is backed up and the corrupt WAL is renamed aside —
+        nothing is deleted, and committed graph data is preserved.
+        """
+        cfg = self._graph_cfg()
+        path = cfg.get("db_path") or str(Path.home() / ".kairos" / "graph.lbdb")
+        try:
+            if self.graph:
+                self.graph.close()
+        except Exception:
+            pass
+        self.graph = None
+        from kairos.graph_memory import quarantine_wal
+        res = quarantine_wal(path)
+        self._init_graph_memory()
+        ok = bool(self.graph and getattr(self.graph, "available", False))
+        stats = self.graph.stats() if ok else {"available": False}
+        self.notify_webhook("graph.repair", {"recovered": ok})
+        return {"recovered": ok, "quarantine": res, "stats": stats}
+
+    def rebuild_graph_memory(self) -> dict:
+        """Repair the graph, then re-ingest retained memories + documents."""
+        res = self.repair_graph()
+        n = 0
+        try:
+            n = self.backfill_graph_memory(force=True)
+        except Exception as e:
+            self.record_error("graph.rebuild", e)
+        res["reingested"] = n
+        return res
 
     def chat(self, prompt: str, attachment_paths=None, progress=None) -> str:
         """Answer a user message with context, recall, vision and tool access.

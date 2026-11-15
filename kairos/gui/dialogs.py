@@ -1224,6 +1224,10 @@ class GraphDialog(QDialog):
         del_btn.clicked.connect(self.delete_selected)
         pending_btn = QPushButton("Pending Review")
         pending_btn.clicked.connect(lambda: PendingDialog(self.engine, self).exec())
+        repair_btn = QPushButton("Repair / Rebuild")
+        repair_btn.setToolTip("Quarantine a corrupt WAL (backup kept) and re-ingest "
+                              "retained memories + documents from knowledge.db")
+        repair_btn.clicked.connect(self.repair_graph)
         clear_btn = QPushButton("Clear All")
         clear_btn.setStyleSheet(f"background-color: {RED}; color: white;")
         clear_btn.clicked.connect(self.clear_all)
@@ -1232,6 +1236,7 @@ class GraphDialog(QDialog):
         row.addWidget(edit_btn)
         row.addWidget(del_btn)
         row.addWidget(pending_btn)
+        row.addWidget(repair_btn)
         row.addWidget(clear_btn)
         row.addStretch()
         row.addWidget(close_btn)
@@ -1342,6 +1347,29 @@ class GraphDialog(QDialog):
         self.engine.graph_clear()
         self._update_stats()
         self.refresh()
+
+    def repair_graph(self):
+        if QMessageBox.question(
+                self, "Repair Knowledge Graph",
+                "Repair the knowledge graph?\n\n"
+                "This backs up the database file, quarantines a corrupt WAL (nothing "
+                "is deleted), reopens the graph, and re-ingests retained memories and "
+                "document summaries. Source data in knowledge.db is never touched.",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes) != QMessageBox.Yes:
+            return
+        self.stats_label.setText("Repairing / rebuilding\u2026")
+        self.worker = GraphRepairWorker(self.engine)
+        self.worker.finished.connect(self._on_repaired)
+        self.worker.start()
+
+    def _on_repaired(self, result):
+        self._update_stats()
+        self.refresh()
+        QMessageBox.information(
+            self, "Kairos",
+            f"Graph recovered: {result.get('recovered')}\n"
+            f"Re-ingested from knowledge.db: {result.get('reingested', 0)} item(s)"
+            + (f"\nError: {result.get('error')}" if result.get("error") else ""))
 
 
 class MyCallSignDialog(QDialog):

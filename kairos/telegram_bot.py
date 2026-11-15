@@ -74,6 +74,7 @@ class TelegramBot:
                 ("graph", self.graph_command),
                 ("graphstats", self.graphstats_command),
                 ("graphdel", self.graphdel_command),
+                ("graphrepair", self.graphrepair_command),
                 ("pending", self.pending_command),
                 ("usage", self.usage_command),
                 ("tasks", self.tasks_command),
@@ -267,6 +268,26 @@ class TelegramBot:
             f"Vector index: {s.get('vector')}\nDB: {s.get('db_path', '')}"
         )
 
+    async def graphrepair_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Quarantine a corrupt WAL (backup kept) and rebuild from knowledge.db."""
+        denied = self._capability_denied("memory")
+        if denied:
+            await update.message.reply_text(denied)
+            return
+        await update.message.reply_text("Repairing the knowledge graph (backup kept)...")
+        try:
+            res = await asyncio.to_thread(self.engine.rebuild_graph_memory)
+        except Exception as e:
+            await update.message.reply_text(f"Repair error: {e}")
+            return
+        stats = res.get("stats", {}) or {}
+        await update.message.reply_text(
+            f"Graph recovered: {res.get('recovered')}\n"
+            f"Re-ingested: {res.get('reingested', 0)} item(s)\n"
+            f"Entities: {stats.get('entities', 0)}  "
+            f"Relations: {stats.get('relations', 0)}  "
+            f"Memories: {stats.get('memories', 0)}")
+
     async def graphdel_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         denied = self._capability_denied("memory")
         if denied:
@@ -364,6 +385,7 @@ class TelegramBot:
             "/graph <query> - search the knowledge graph\n"
             "/pending - review proposed knowledge\n"
             "/graphdel <id> - delete a graph entity\n"
+            "/graphrepair - repair/rebuild the knowledge graph\n"
             "/mode chat|plan|execute - set the agent mode\n"
             "/planagent <goal> - produce a durable plan\n"
             "/execute <goal> - plan and autonomously run the steps\n"

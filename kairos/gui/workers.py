@@ -318,3 +318,17 @@ class BrowserOpenWorker(QThread):
             self.finished.emit(f"[Error] {e}")
 
 
+class GraphRepairWorker(QThread):
+    finished = Signal(dict)
+
+    def __init__(self, engine):
+        super().__init__()
+        self.engine = engine
+
+    def run(self):
+        try:
+            self.finished.emit(self.engine.rebuild_graph_memory())
+        except Exception as e:
+            self.finished.emit({"recovered": False, "error": str(e)})
+
+

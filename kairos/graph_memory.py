@@ -18,6 +18,8 @@ import asyncio
 import importlib.util
 import logging
 import re
+import shutil
+import sys
 import threading
 import time
 import uuid
@@ -29,6 +31,39 @@ from .ladybug_bootstrap import ensure_runtime
 logger = logging.getLogger(__name__)
 
 EMBED_DIM = 384
+
+
+def _is_wal_error(message: str) -> bool:
+    m = (message or "").lower()
+    return "wal" in m and ("corrupt" in m or "invalid" in m or "record type" in m)
+
+
+def quarantine_wal(db_path, keep_backup: bool = True) -> dict:
+    """Move a corrupt ``<db>.wal`` aside (keeping a copy) so the main DB can open.
+
+    This never deletes anything: the database file is copied to a timestamped
+    ``.bak-<ts>`` and the WAL is renamed to ``.wal.corrupt-<ts>``. The main DB
+    keeps all data committed up to its last checkpoint.
+    """
+    p = Path(db_path)
+    wal = Path(str(db_path) + ".wal")
+    ts = time.strftime("%Y%m%d-%H%M%S")
+    out = {"db": str(p), "backup": None, "quarantined": None}
+    if keep_backup and p.exists():
+        bak = p.with_name(f"{p.name}.bak-{ts}")
+        try:
+            shutil.copy2(p, bak)
+            out["backup"] = str(bak)
+        except Exception as e:
+            logger.warning("Could not back up graph DB: %s", e)
+    if wal.exists():
+        wbak = Path(str(wal) + f".corrupt-{ts}")
+        try:
+            shutil.move(str(wal), str(wbak))
+            out["quarantined"] = str(wbak)
+        except Exception as e:
+            logger.warning("Could not quarantine graph WAL: %s", e)
+    return out
 
 SCHEMA_DDL = [
     "CREATE NODE TABLE IF NOT EXISTS Entity("
@@ -66,12 +101,13 @@ class GraphMemory:
     """Async-first LadybugDB graph with sync wrappers."""
 
     def __init__(self, db_path, embed_fn=None, max_concurrent: int = 4,
-                 dedup_distance: float = 0.15):
+                 dedup_distance: float = 0.15, auto_repair: bool = True):
         self.info = {}
         self.error = None
         self.available = False
         self.vector_available = False
         self.embeddings_available = embed_fn is not None
+        self.auto_repair = auto_repair
         self._index_dirty = False
         self._last_index_rebuild = 0.0
         self.dedup_distance = dedup_distance
@@ -107,9 +143,21 @@ class GraphMemory:
             self._start_loop()
             self._run(self._ainit())
         except Exception as e:
+            msg = str(e)
+            if self.auto_repair and _is_wal_error(msg):
+                logger.warning("Graph WAL is corrupt; quarantining it (backup kept) "
+                               "and retrying: %s", msg)
+                res = quarantine_wal(self._db_path)
+                logger.warning("Graph WAL quarantined: %s", res)
+                try:
+                    self._run(self._ainit())
+                    logger.info("Graph memory recovered after WAL quarantine.")
+                    return
+                except Exception as e2:
+                    msg = str(e2)
             logger.exception("Failed to initialise graph memory.")
             self.available = False
-            self.error = str(e)
+            self.error = msg
 
     # ------------------------------------------------------------------
     # Event-loop plumbing
@@ -627,3 +675,151 @@ class GraphMemory:
                 self._db.close()
         except Exception:
             pass
+
+
+# ---------------------------------------------------------------------------
+# Recovery CLI:  python -m kairos.graph_memory diagnose|recover|rebuild
+# ---------------------------------------------------------------------------
+def _probe_open(db_path, drop_wal: bool = False) -> dict:
+    """Open a temporary COPY of the DB (never the original) and read counts."""
+    import tempfile
+    src = Path(db_path)
+    if not src.exists():
+        return {"ok": False, "error": "database not found"}
+    tmp = Path(tempfile.mkdtemp(prefix="lbprobe_"))
+    dst = tmp / src.name
+    d = None
+    try:
+        shutil.copy2(src, dst)
+        wal = Path(str(src) + ".wal")
+        if wal.exists() and not drop_wal:
+            shutil.copy2(wal, Path(str(dst) + ".wal"))
+        import ladybug
+        d = ladybug.Database(str(dst))
+        try:
+            conn = d.AsyncConnection()
+        except Exception:
+            conn = ladybug.Connection(d)
+
+        def count(q):
+            r = conn.execute(q)
+            return (r.get_all() if hasattr(r, "get_all") else r)[0][0]
+
+        return {"ok": True,
+                "entities": count("MATCH (e:Entity) RETURN count(*);"),
+                "relations": count("MATCH (:Entity)-[r:Relates]->(:Entity) RETURN count(*);"),
+                "memories": count("MATCH (m:Memory) RETURN count(*);")}
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:300]}
+    finally:
+        try:
+            if d is not None:
+                d.close()
+        except Exception:
+            pass
+
+
+def main(argv=None):
+    import argparse
+    argv = list(sys.argv[1:] if argv is None else argv)
+    parser = argparse.ArgumentParser(
+        prog="python -m kairos.graph_memory",
+        description="Diagnose/repair the Kairos knowledge graph (LadybugDB). "
+                    "Source data in knowledge.db is never touched.")
+    sub = parser.add_subparsers(dest="cmd")
+    for name in ("diagnose", "recover", "rebuild"):
+        sp = sub.add_parser(name)
+        sp.add_argument("--db", default=None,
+                        help="graph db path (default ~/.kairos/graph.lbdb)")
+        if name == "rebuild":
+            sp.add_argument("--no-backfill", action="store_true",
+                            help="only quarantine the WAL; do not re-ingest knowledge.db")
+    args = parser.parse_args(argv)
+    if not getattr(args, "cmd", None):
+        parser.print_help()
+        return 2
+
+    try:
+        from kairos import config
+        cfg = (config.load_config().get("graph_memory", {}) or {})
+    except Exception:
+        cfg = {}
+    db = args.db or cfg.get("db_path") or str(Path.home() / ".kairos" / "graph.lbdb")
+
+    info = ensure_runtime()
+    if not info.get("available"):
+        print("Graph runtime unavailable:", info.get("error"))
+        return 1
+
+    print(f"Graph DB: {db}")
+    if args.cmd == "diagnose":
+        if not Path(db).exists():
+            print("  (database not found)")
+            return 1
+        asis = _probe_open(db, drop_wal=False)
+        print("  open as-is:       ", asis)
+        if not asis.get("ok"):
+            nowal = _probe_open(db, drop_wal=True)
+            print("  open without WAL: ", nowal)
+            if nowal.get("ok"):
+                print("  => The WAL is corrupt. Run `recover` to quarantine it "
+                      "(a backup is kept; committed data is preserved).")
+                return 0
+            print("  => The database itself is unreadable.")
+            return 1
+        return 0
+
+    if args.cmd == "recover":
+        res = quarantine_wal(db)
+        print("  backup:      ", res.get("backup"))
+        print("  quarantined: ", res.get("quarantined"))
+        probe = _probe_open(db, drop_wal=True)
+        print("  recovered:   ", probe)
+        return 0 if probe.get("ok") else 1
+
+    if args.cmd == "rebuild":
+        res = quarantine_wal(db)
+        print("  quarantine:", res)
+        if args.no_backfill:
+            probe = _probe_open(db, drop_wal=True)
+            print("  open check:", probe)
+            return 0 if probe.get("ok") else 1
+        try:
+            from kairos.storage.knowledge import KnowledgeStore
+            ks = KnowledgeStore()
+        except Exception as e:
+            print("  could not open knowledge store:", e)
+            return 1
+        embed_fn = getattr(ks, "_embed_fn", None)
+        gm = GraphMemory(db, embed_fn=embed_fn,
+                         dedup_distance=float(cfg.get("dedup_distance", 0.15)))
+        if not gm.available:
+            print("  graph unavailable:", gm.error)
+            return 1
+        items = []
+        try:
+            for mid, content, created in ks.list_memories():
+                items.append({"id": f"kn:{mid}", "text": content, "kind": "retained",
+                              "source": "retention"})
+        except Exception:
+            pass
+        try:
+            for row in ks.get_all_documents():
+                doc_id, url, summary, _created = (list(row) + [None, None, None, None])[:4]
+                if summary:
+                    items.append({"id": f"doc:{doc_id}", "text": f"{url or ''}\n{summary}",
+                                  "kind": "document", "source": "web"})
+        except Exception:
+            pass
+        n = gm.backfill(items)
+        print(f"  re-ingested {n} item(s) from knowledge.db")
+        print("  stats:", gm.stats())
+        gm.close()
+        return 0
+
+    parser.print_help()
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

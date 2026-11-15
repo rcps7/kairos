@@ -443,13 +443,41 @@ graph small — minimising LLM cost.
 - Native runtime (the Ladybug shared library + OpenSSL/MSVC deps) is assembled
   once into `~/.kairos/lbug/`.
 - Config (`graph_memory`): `enabled`, `require_approval` (default true),
-  `auto_approve` (default false), `extract_on_chat`, and per-area reuse toggles
-  `use_in_chat`, `use_in_tools`, `use_in_skills`, `use_in_council`,
-  `use_in_predict`, plus `max_nodes`, `max_memories`, `dedup_distance`.
+  `auto_approve` (default false), `extract_on_chat`, `auto_repair` (default true),
+  and per-area reuse toggles `use_in_chat`, `use_in_tools`, `use_in_skills`,
+  `use_in_council`, `use_in_predict`, plus `max_nodes`, `max_memories`,
+  `dedup_distance`.
 
 > Note: the Ladybug **full-text (FTS)** extension aborts the process on the
 > current Windows/Python 3.14 build, so keyword search falls back to a
 > Python-side scan; vector search and traversal are unaffected.
+
+### Repair / recovery
+
+The graph is a **derived** store — your durable data (retained memories and
+document summaries) lives in `knowledge.db`, and proposed knowledge lives in
+`graph_pending.db`. Neither is ever touched by graph repair, so **no saved data
+is lost**.
+
+If the graph fails to open (for example a corrupt write-ahead log), Kairos logs
+a **warning** and keeps running with the graph disabled — a broken graph never
+blocks startup. To fix it:
+
+- **GUI:** `Edit → Knowledge Graph… → Repair / Rebuild`.
+- **Telegram:** `/graphrepair`.
+- **CLI:**
+  ```bat
+  python -m kairos.graph_memory diagnose   REM read-only check
+  python -m kairos.graph_memory recover    REM quarantine a corrupt WAL (backup kept)
+  python -m kairos.graph_memory rebuild    REM recover + re-ingest knowledge.db
+  ```
+
+Repair is **non-destructive**: the database file is copied to a timestamped
+`graph.lbdb.bak-<ts>` and a corrupt WAL is renamed to
+`graph.lbdb.wal.corrupt-<ts>` — nothing is deleted, and all data committed up to
+the last checkpoint is preserved. `rebuild` additionally re-ingests retained
+memories and document summaries. On startup, `graph_memory.auto_repair` (default
+`true`) auto-quarantines a corrupt WAL (backup kept) and retries once.
 
 ---
 
