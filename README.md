@@ -195,7 +195,7 @@ buttons**, and is divided into three panes:
 |------|---------|
 | **File** | New Session (`Ctrl+N`), Exit, Kill Switch (Emergency) |
 | **Edit** | LLM Providers, Storage Settings, Email Settings, Telegram Settings…, Peripheral Control, Retention (Delete Expired), Skills, Agent Character…, Knowledge Graph…, Pending Knowledge…, Git & Version Control…, Webhook… |
-| **Tools** | Predictive Engine, Web Designer (browser)…, Drawings & Documents… |
+| **Tools** | Predictive Engine, Web Designer (browser)…, Drawings & Design… |
 | **Agent** | Settings…, Usage & Traces…, Plans & Tasks… |
 | **View** | Self-Reflect, Show Lessons, Refresh Status |
 | **Window** | Minimize, Maximize |
@@ -242,7 +242,7 @@ buttons**, and is divided into three panes:
 | `/git <status\|diff\|log\|branches\|commit <msg>\|branch <n>\|checkout <n>\|pull\|push>` | Git workflows |
 | `/write <file> \| <content>` | Save a document to the Artifacts folder |
 | `/draw <name> \| <svg or description>` | Draw an SVG diagram |
-| `/artifacts` | List drawings & documents |
+| `/artifacts` | List drawings & design files |
 | `/webhooks` | Show webhook configuration |
 | `/design <url> \| <goal>` | Drive a headed browser to design a web page |
 
@@ -893,7 +893,7 @@ git-commit events. Optional HMAC signing via the outbound secret.
 
 ---
 
-## Drawings & Documents (draw & write)
+## Drawings & Design (draw & write)
 
 Kairos can produce files and store them under
 `<storage_root>/Kairos/Artifacts/`:
@@ -904,10 +904,18 @@ Kairos can produce files and store them under
   execute code or phone home.
 - **Documents** — Markdown, text, code, JSON, CSV and similar, written atomically.
 
-Access it via **Tools → Drawings & Documents…** (browse/open/reveal + create a
-document), the tools `draw_diagram` and `write_document`, or Telegram
-`/write <file> | <content>` and `/draw <name> | <svg or description>`. Gated by the
-`artifacts` capability (`artifacts.enabled`, `artifacts.allow_svg`).
+Access it via **Tools → Drawings & Design…**:
+
+- **Design from description (SVG)** — type a description (e.g. *"a block diagram of
+  an ESP32-S3 with a 3.3V regulator"*) and click **Generate SVG**; the LLM writes
+  the SVG code, it is sanitized and saved. The drawing is offered for opening.
+- **Write document** — save Markdown/text/code/JSON/CSV atomically.
+- **Manage** — **Open**, **Reveal Folder**, and **Delete Selected** (with
+  confirmation) remove files from the Artifacts folder.
+
+Also available as the tools `draw_diagram` and `write_document`, or Telegram
+`/draw <name> | <description>` (generates SVG) and `/write <file> | <content>`.
+Gated by the `artifacts` capability (`artifacts.enabled`, `artifacts.allow_svg`).
 
 ---
 
@@ -921,15 +929,19 @@ For design work on canvas/SVG editors such as **EasyEDA**, Kairos can drive a
 - Press keyboard keys.
 - Evaluate JavaScript (`browser.allow_js_eval`) to call the site's own editor API.
 
-Open **Tools → Web Designer (browser)…**, enter a start URL and a goal, then
-**Open Session** and **Run Design Task**. The task planner navigates, acts and
+Open **Tools → Web Designer (browser)…**. The dialog has **Enable browser
+session** and **Enable JavaScript evaluation** toggles (saved to the config), an
+**Install Chromium (Playwright)** button, a start URL and a design goal. Click
+**Open Session**, then **Run Design Task**. The task planner navigates, acts and
 observes the page (screenshots go to the Media folder). The same capability is
 exposed as tools `browser_open`, `browser_js`, `browser_mouse` and via Telegram
 `/design <url> | <goal>`, gated by the `browser_control` capability.
 
-Setup: install the browser once with `python -m playwright install chromium`, then
-set `browser.enabled` (and optionally `browser.allow_js_eval`). JavaScript
-evaluation is **off by default**.
+The session is **off by default**. Tick **Enable browser session** in the dialog
+(or set `browser.enabled`), install Chromium once via the dialog's button (or
+`python -m playwright install chromium`), and optionally enable JavaScript
+evaluation (`browser.allow_js_eval`) to let the agent call the site's own editor
+API. If you try to open a session while it is disabled, Kairos offers to enable it.
 
 > Results depend on the target site's DOM/JS API; EasyEDA tasks are best-effort and
 > should be reviewed before you rely on them.

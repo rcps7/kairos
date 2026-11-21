@@ -1369,6 +1369,35 @@ class KairosEngine:
         from kairos import artifacts
         return artifacts.list_artifacts(limit)
 
+    def draw_from_description(self, name: str, description: str) -> str:
+        """Ask the LLM for SVG code matching a description, then save it."""
+        self.require("artifacts")
+        from kairos import artifacts
+        description = (description or "").strip()
+        if not description:
+            raise ValueError("A description is required to draw.")
+        prompt = (
+            "You are a precise SVG generator. Produce ONLY a complete, valid SVG "
+            "document — a single <svg> root element with a viewBox — and nothing "
+            "else: no markdown fences and no prose. Use simple shapes, paths, <text> "
+            "labels and a dark background (#0d1117) with clear light strokes/colours "
+            "so it looks good on a dark UI. Do not use <script>, event handlers, "
+            "external images or remote URLs.\n\n"
+            f"Design this:\n{description}"
+        )
+        svg = self.ask_llm(prompt, use_character=False)
+        path = artifacts.draw_svg(name or "design", svg)
+        self.notify_webhook("artifact.draw", {"name": name, "path": path})
+        return path
+
+    def delete_artifact(self, path: str) -> bool:
+        from kairos import artifacts
+        try:
+            return artifacts.delete_artifact(path)
+        except Exception as e:
+            self.record_error("artifacts.delete", e)
+            raise
+
     # ---- Skills ----
     def list_skills(self) -> list:
         return self.skills.list_skills()

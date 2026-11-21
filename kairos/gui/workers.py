@@ -350,3 +350,40 @@ class ModelListWorker(QThread):
                                 "error": str(e), "models": []})
 
 
+class ArtifactGenWorker(QThread):
+    """Generate SVG from a description via the LLM (off the UI thread)."""
+
+    finished = Signal(str)
+
+    def __init__(self, engine, name, description):
+        super().__init__()
+        self.engine = engine
+        self.name = name
+        self.description = description
+
+    def run(self):
+        try:
+            path = self.engine.draw_from_description(self.name, self.description)
+            self.finished.emit(f"Saved: {path}")
+        except Exception as e:
+            self.finished.emit(f"[Error] {e}")
+
+
+class PlaywrightInstallWorker(QThread):
+    """Install the Playwright Chromium browser (once)."""
+
+    finished = Signal(str)
+
+    def run(self):
+        import subprocess
+        import sys
+        try:
+            p = subprocess.run([sys.executable, "-m", "playwright", "install",
+                                "chromium"],
+                               capture_output=True, text=True, timeout=1800)
+            out = ((p.stdout or "") + (p.stderr or ""))[-1500:]
+            self.finished.emit("Playwright Chromium install finished.\n" + out)
+        except Exception as e:
+            self.finished.emit(f"[Error] {e}")
+
+

@@ -382,7 +382,7 @@ class KairosGUI(QMainWindow):
         tools_menu.addAction("Predictive Engine", self.open_predict_dialog)
         self._designer_action = tools_menu.addAction("Web Designer (browser)\u2026",
                                                      self.open_designer_dialog)
-        tools_menu.addAction("Drawings & Documents\u2026", self.open_artifacts_dialog)
+        tools_menu.addAction("Drawings & Design\u2026", self.open_artifacts_dialog)
 
         collab_menu = menubar.addMenu("&Collaborate")
         collab_menu.addAction("My Call Sign\u2026", self.open_my_callsign_dialog)

@@ -132,6 +132,18 @@ def list_artifacts(limit: int = 200) -> list:
     return out
 
 
+def delete_artifact(path: str) -> bool:
+    """Delete a single artifact, confined to the Artifacts folder."""
+    d = _dir().resolve()
+    p = Path(path).resolve()
+    if p != d and d not in p.parents:
+        raise PermissionError("Refusing to delete a file outside the artifacts folder.")
+    if not p.exists() or not p.is_file():
+        return False
+    p.unlink()
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Dependency-light SVG builders
 # ---------------------------------------------------------------------------

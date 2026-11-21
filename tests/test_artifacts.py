@@ -55,3 +55,19 @@ def test_disabled(monkeypatch, tmp_path):
     monkeypatch.setattr(artifacts, "_cfg", lambda: {"enabled": False})
     with pytest.raises(PermissionError):
         artifacts.write_document("x.md", "y")
+
+
+def test_delete_artifact_confined(monkeypatch, tmp_path):
+    import pytest
+    _enable(monkeypatch, tmp_path)
+    p = tmp_path / "x.svg"
+    p.write_text("<svg/>", encoding="utf-8")
+    assert artifacts.delete_artifact(str(p)) is True
+    assert not p.exists()
+
+    outside = tmp_path.parent / "evil.txt"
+    outside.write_text("x", encoding="utf-8")
+    with pytest.raises(PermissionError):
+        artifacts.delete_artifact(str(outside))
+    assert outside.exists()
+

@@ -2696,14 +2696,14 @@ class WebhookDialog(QDialog):
 
 
 class ArtifactsDialog(QDialog):
-    """Browse diagram/document artifacts and create new documents."""
+    """Drawings & Design: generate SVG from a description, write documents, manage files."""
 
     def __init__(self, engine, parent=None):
         super().__init__(parent)
         self.engine = engine
-        self.setWindowTitle("Drawings & Documents")
+        self.setWindowTitle("Drawings & Design")
         self.setStyleSheet(_dialog_style())
-        self.resize(720, 560)
+        self.resize(760, 680)
         layout = QVBoxLayout(self)
 
         row = QHBoxLayout()
@@ -2713,28 +2713,55 @@ class ArtifactsDialog(QDialog):
         open_btn.clicked.connect(self._open)
         reveal = QPushButton("Reveal Folder")
         reveal.clicked.connect(self._reveal)
+        self.delete_btn = QPushButton("Delete Selected")
+        self.delete_btn.setStyleSheet(f"background-color: {RED}; color: white;")
+        self.delete_btn.clicked.connect(self._delete)
         row.addWidget(refresh)
         row.addWidget(open_btn)
         row.addWidget(reveal)
         row.addStretch()
+        row.addWidget(self.delete_btn)
         layout.addLayout(row)
 
         self.list_widget = QListWidget()
         layout.addWidget(self.list_widget, 1)
 
-        new_box = QGroupBox("New document")
-        nf = QVBoxLayout(new_box)
+        # --- Design from a description (SVG) ---
+        design_box = QGroupBox("Design from description (SVG)")
+        df = QVBoxLayout(design_box)
+        self.design_name = QLineEdit()
+        self.design_name.setPlaceholderText("name (e.g. esp32_schematic)")
+        self.design_desc = QTextEdit()
+        self.design_desc.setPlaceholderText(
+            "Describe what to draw, e.g. \u201cA block diagram of an ESP32-S3 with "
+            "a 3.3V regulator and USB-C connector, labelled.\u201d")
+        self.design_desc.setFixedHeight(80)
+        self.draw_btn = QPushButton("Generate SVG")
+        self.draw_btn.setStyleSheet(
+            f"background-color: {GREEN_DIM}; color: {BG_DARK}; font-weight: bold;")
+        self.draw_btn.clicked.connect(self._generate_svg)
+        self.design_status = QLabel("")
+        self.design_status.setStyleSheet(f"color: {TEXT_GREY};")
+        df.addWidget(self.design_name)
+        df.addWidget(self.design_desc)
+        df.addWidget(self.draw_btn)
+        df.addWidget(self.design_status)
+        layout.addWidget(design_box)
+
+        # --- Write a document (secondary) ---
+        doc_box = QGroupBox("Write document")
+        nf = QVBoxLayout(doc_box)
         self.doc_name = QLineEdit()
         self.doc_name.setPlaceholderText("filename (e.g. notes.md)")
         self.doc_body = QTextEdit()
         self.doc_body.setPlaceholderText("Document content\u2026")
-        self.doc_body.setFixedHeight(90)
+        self.doc_body.setFixedHeight(70)
         save = QPushButton("Save Document")
         save.clicked.connect(self._save_doc)
         nf.addWidget(self.doc_name)
         nf.addWidget(self.doc_body)
         nf.addWidget(save)
-        layout.addWidget(new_box)
+        layout.addWidget(doc_box)
 
         close = QPushButton("Close")
         close.clicked.connect(self.accept)
@@ -2764,12 +2791,60 @@ class ArtifactsDialog(QDialog):
         _open_path(path)
 
     def _reveal(self):
-        from pathlib import Path
         try:
             from kairos import artifacts
             _open_path(str(artifacts._dir()))
         except Exception as e:
             QMessageBox.warning(self, "Kairos", str(e))
+
+    def _delete(self):
+        path = self._selected_path()
+        if not path:
+            QMessageBox.information(self, "Kairos", "Select an artifact to delete first.")
+            return
+        import os
+        name = os.path.basename(path)
+        if QMessageBox.question(self, "Delete artifact",
+                                f"Delete \u201c{name}\u201d permanently?",
+                                QMessageBox.Yes | QMessageBox.No,
+                                QMessageBox.No) != QMessageBox.Yes:
+            return
+        try:
+            self.engine.delete_artifact(path)
+            self._refresh()
+            self.design_status.setText(f"Deleted {name}")
+        except Exception as e:
+            QMessageBox.warning(self, "Kairos", f"Delete failed: {e}")
+
+    def _generate_svg(self):
+        description = self.design_desc.toPlainText().strip()
+        if not description:
+            QMessageBox.warning(self, "Kairos", "Enter a description to draw.")
+            return
+        name = self.design_name.text().strip() or "design"
+        self.draw_btn.setEnabled(False)
+        self.draw_btn.setText("Generating\u2026")
+        self.design_status.setText("Generating SVG from the description\u2026")
+        self.worker = ArtifactGenWorker(self.engine, name, description)
+        self.worker.finished.connect(self._on_svg_generated)
+        self.worker.start()
+
+    def _on_svg_generated(self, result):
+        self.draw_btn.setEnabled(True)
+        self.draw_btn.setText("Generate SVG")
+        if result.startswith("[Error]"):
+            self.design_status.setText(result)
+            return
+        self.design_status.setText(result)
+        self.design_name.clear()
+        self.design_desc.clear()
+        self._refresh()
+        path = result.split("Saved:", 1)[-1].strip() if "Saved:" in result else None
+        if path and QMessageBox.question(self, "Artifact",
+                                         "SVG created. Open it now?",
+                                         QMessageBox.Yes | QMessageBox.No,
+                                         QMessageBox.Yes) == QMessageBox.Yes:
+            _open_path(path)
 
     def _save_doc(self):
         name = self.doc_name.text().strip()
@@ -2794,15 +2869,29 @@ class DesignerDialog(QDialog):
         self.engine = engine
         self.setWindowTitle("Web Designer (headed browser)")
         self.setStyleSheet(_dialog_style())
-        self.resize(820, 640)
+        self.resize(840, 680)
         layout = QVBoxLayout(self)
 
-        note = QLabel("Requires Playwright Chromium and browser.enabled = true. "
-                      "Enable JS evaluation (browser.allow_js_eval) to let the "
-                      "agent call the editor's own API.")
-        note.setWordWrap(True)
-        note.setStyleSheet(f"color: {TEXT_GREY};")
-        layout.addWidget(note)
+        bcfg = engine.config.get("browser", {}) or {}
+
+        settings = QGroupBox("Browser session")
+        sf = QVBoxLayout(settings)
+        self.enable_chk = QCheckBox("Enable browser session (browser.enabled)")
+        self.enable_chk.setChecked(bool(bcfg.get("enabled")))
+        self.enable_chk.toggled.connect(self._apply_browser_settings)
+        self.js_chk = QCheckBox("Enable JavaScript evaluation (browser.allow_js_eval)")
+        self.js_chk.setChecked(bool(bcfg.get("allow_js_eval")))
+        self.js_chk.toggled.connect(self._apply_browser_settings)
+        install_row = QHBoxLayout()
+        self.install_btn = QPushButton("Install Chromium (Playwright)")
+        self.install_btn.setToolTip("Run: python -m playwright install chromium")
+        self.install_btn.clicked.connect(self._install_chromium)
+        install_row.addWidget(self.install_btn)
+        install_row.addStretch()
+        sf.addWidget(self.enable_chk)
+        sf.addWidget(self.js_chk)
+        sf.addLayout(install_row)
+        layout.addWidget(settings)
 
         url_row = QHBoxLayout()
         url_row.addWidget(QLabel("Start URL:"))
@@ -2838,18 +2927,77 @@ class DesignerDialog(QDialog):
         close.clicked.connect(self.accept)
         layout.addWidget(close)
 
+        if not self.enable_chk.isChecked():
+            self.status.setText("Browser session is disabled \u2014 tick 'Enable browser "
+                                "session' above (and install Chromium if needed).")
+
+    def _apply_browser_settings(self, _checked=False):
+        enabled = self.enable_chk.isChecked()
+        js = self.js_chk.isChecked()
+
+        def _mutate(c):
+            b = c.setdefault("browser", {})
+            b["enabled"] = enabled
+            b["allow_js_eval"] = js
+
+        try:
+            self.engine.config = _merge_save(_mutate)
+        except Exception as e:
+            self.status.setText(f"Could not save browser settings: {e}")
+            return
+        self.status.setText("Browser session enabled." if enabled
+                            else "Browser session disabled.")
+
+    def _ensure_enabled(self) -> bool:
+        from kairos import browser
+        try:
+            if browser.session_enabled():
+                return True
+        except Exception:
+            pass
+        if QMessageBox.question(
+                self, "Enable Browser Session",
+                "The browser session is disabled. Enable it now?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes) != QMessageBox.Yes:
+            return False
+        self.enable_chk.setChecked(True)   # triggers _apply_browser_settings
+        return True
+
     def _open(self):
+        if not self._ensure_enabled():
+            return
         url = self.url_edit.text().strip()
         self.status.setText("Opening session (a Chromium window should appear)\u2026")
         self.worker = BrowserOpenWorker(self.engine, url)
-        self.worker.finished.connect(lambda t: (self.status.setText("Session open."),
-                                                 self.out.setPlainText(t)))
+        self.worker.finished.connect(self._on_open_done)
         self.worker.start()
+
+    def _on_open_done(self, text):
+        if text.startswith("[Error]"):
+            self.status.setText(text)
+        else:
+            self.status.setText("Session open.")
+        self.out.setPlainText(text)
+
+    def _install_chromium(self):
+        self.status.setText("Installing Chromium (this may take a few minutes)\u2026")
+        self.install_btn.setEnabled(False)
+        self.worker = PlaywrightInstallWorker()
+        self.worker.finished.connect(self._on_install_done)
+        self.worker.start()
+
+    def _on_install_done(self, text):
+        self.install_btn.setEnabled(True)
+        self.status.setText("Chromium install finished."
+                            if not text.startswith("[Error]") else text)
+        self.out.setPlainText(text)
 
     def _run(self):
         goal = self.goal_edit.toPlainText().strip()
         if not goal:
             QMessageBox.warning(self, "Kairos", "Enter a design goal.")
+            return
+        if not self._ensure_enabled():
             return
         url = self.url_edit.text().strip()
         self.run_btn.setEnabled(False)
