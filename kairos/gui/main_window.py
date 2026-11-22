@@ -1736,7 +1736,11 @@ class KairosGUI(QMainWindow):
             "A lightweight, self-improving agent with web search,\n"
             "knowledge library, media download, email, peripheral control,\n"
             "and a watchdog kill switch.\n\n"
-            "MIT License",
+            "Developed by RC\n\n"
+            "GNU General Public License v3.0 (GPLv3)\n"
+            "This program is free software: you can redistribute it and/or\n"
+            "modify it under the terms of the GPLv3. There is NO WARRANTY.\n"
+            "See <https://www.gnu.org/licenses/gpl-3.0.html>.",
         )
 
     def emergency_kill(self):

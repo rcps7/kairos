@@ -1,8 +1,9 @@
 # Contributing to KAIROS
 
 Thanks for your interest in contributing. KAIROS is licensed under the
-**PolyForm Noncommercial License 1.0.0** — free for personal, educational, and
-non-commercial use. Commercial use requires a separate license from the author.
+**GNU General Public License v3.0 (GPLv3)** — free software that you may run,
+study, share, and modify, including for commercial purposes, under the terms of
+that license. KAIROS is **Developed by RC**.
 
 ## Ways to contribute
 
@@ -51,4 +52,4 @@ The [.gitignore](.gitignore) already covers these. Run `git status` before commi
 ## License note
 
 By contributing, you agree that your contributions are licensed under the same
-PolyForm Noncommercial License 1.0.0 as the project.
+GNU General Public License v3.0 (GPLv3) as the project.

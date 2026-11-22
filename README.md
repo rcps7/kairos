@@ -6,7 +6,7 @@ audio/video, reads and sends email, controls serial peripherals (ESP32 / Arduino
 Raspberry Pi), talks to you over Telegram, and learns from its own errors — all guarded
 by a watchdog with a kill switch.
 
-Licensed under the **PolyForm Noncommercial License 1.0.0** (free for personal/non-commercial use).
+Licensed under the **GNU General Public License v3.0 (GPLv3)**. **Developed by RC.**
 
 ---
 
@@ -1187,24 +1187,23 @@ untracked files.
 
 ## License
 
-**PolyForm Noncommercial License 1.0.0** — see [LICENSE](LICENSE).
+**GNU General Public License v3.0 (GPLv3)** — see [LICENSE](LICENSE).
 
-- Free for **personal, educational, research, and non-commercial** use.
-- **Commercial use requires a separate commercial license** from the author
-  (acknowledgment and, where applicable, a royalty). Contact the author to obtain one.
-- The software is provided "as is", without warranty.
+**Developed by RC.** Copyright (C) 2026 RC — <https://github.com/rcps7/kairos>.
 
-See <https://polyformproject.org/licenses/noncommercial/1.0.0> for the full terms.
+- Free software: you may run, study, share, and modify KAIROS, including for
+  commercial purposes, under the terms of the GPLv3.
+- If you distribute copies or modified versions, you must pass on the same
+  freedoms and make the corresponding source available under the GPLv3.
+- The software is provided "as is", without warranty of any kind.
 
-### Commercial license
+See <https://www.gnu.org/licenses/gpl-3.0.html> for the full terms.
 
-To use KAIROS (or a modified version of it) in any commercial product, service,
-or organization, contact the author to obtain a written commercial license:
+### Contact
 
 - **Email:** `roopchandps@gmail.com`
 - **GitHub:** `https://github.com/rcps7/kairos`
-
-The commercial license includes attribution and royalty terms agreed in writing.
+- **Developer:** RC
 
 ---
 

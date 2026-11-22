@@ -1,7 +1,7 @@
 # KAIROS Roadmap
 
-Current version: **0.16.3** · License: MIT (PolyForm Noncommercial for the app) ·
-Repo: https://github.com/rcps7/kairos
+Current version: **0.16.3** · License: GNU General Public License v3.0 (GPLv3) ·
+Developed by RC · Repo: https://github.com/rcps7/kairos
 
 This document tracks shipped functionality and the forward plan. Each release is
 published on GitHub Releases with a **signed** `KAIROS-agent-bundle.zip` (plus

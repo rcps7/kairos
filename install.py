@@ -1,6 +1,7 @@
 # Kairos AI Agent — installer
 # Creates a virtual environment and installs all dependencies.
-# MIT License
+# Developed by RC
+# GNU General Public License v3.0 (GPLv3) — see LICENSE
 
 import os
 import subprocess
