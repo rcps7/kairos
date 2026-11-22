@@ -40,6 +40,7 @@ PROGRAM_FILES = [
     "ROADMAP.md",
     "SECURITY.md",
     "LICENSE",
+    "NOTICE",
     "CONTRIBUTING.md",
     "setup.cfg",
 ]

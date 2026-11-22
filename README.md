@@ -1187,7 +1187,7 @@ untracked files.
 
 ## License
 
-**GNU General Public License v3.0 (GPLv3)** — see [LICENSE](LICENSE).
+**GNU General Public License v3.0 (GPLv3)** — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
 
 **Developed by RC.** Copyright (C) 2026 RC — <https://github.com/rcps7/kairos>.
 
@@ -1209,5 +1209,4 @@ See <https://www.gnu.org/licenses/gpl-3.0.html> for the full terms.
 
 ## Contributing
 
-Contributions are welcome for non-commercial improvements — see
-[CONTRIBUTING.md](CONTRIBUTING.md).
+Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
