@@ -126,6 +126,26 @@ TOOL_SCHEMAS = [
         {"action": {"type": "string"}, "selector": {"type": "string"},
          "x": {"type": "number"}, "y": {"type": "number"},
          "text": {"type": "string"}}, ["action"]),
+    _fn("browser_detect", "List installed and running web browsers.",
+        {}, []),
+    _fn("browser_start", "Start/attach the Browser Agent to a chosen browser.",
+        {"choice": {"type": "string"}, "url": {"type": "string"},
+         "mode": {"type": "string"}}, []),
+    _fn("browser_goto", "Navigate the Browser Agent to a URL.",
+        {"url": {"type": "string"}}, ["url"]),
+    _fn("browser_fill", "Fill an input (by selector or label) in the Browser Agent.",
+        {"selector": {"type": "string"}, "label": {"type": "string"},
+         "value": {"type": "string"}}, ["value"]),
+    _fn("browser_click", "Click a selector, or an element by visible text.",
+        {"selector": {"type": "string"}, "text": {"type": "string"}}, []),
+    _fn("browser_read", "Read the text of the current page or a selector.",
+        {"selector": {"type": "string"}}, []),
+    _fn("browser_form", "Fill multiple form fields (label/name -> value).",
+        {"fields": {"type": "object"}}, ["fields"]),
+    _fn("browser_design", "Run a goal-driven design task in the Browser Agent.",
+        {"goal": {"type": "string"}, "url": {"type": "string"}}, ["goal"]),
+    _fn("browser_captcha", "Detect CAPTCHA widgets on the current page.",
+        {}, []),
 ]
 
 _CAP = {
@@ -166,6 +186,15 @@ _CAP = {
     "browser_open": "browser_control",
     "browser_js": "browser_control",
     "browser_mouse": "browser_control",
+    "browser_detect": None,
+    "browser_start": "browser_control",
+    "browser_goto": "browser_control",
+    "browser_fill": "browser_control",
+    "browser_click": "browser_control",
+    "browser_read": "browser_control",
+    "browser_form": "browser_control",
+    "browser_design": "browser_control",
+    "browser_captcha": None,
 }
 
 
@@ -365,4 +394,36 @@ def execute(engine, name: str, args: dict) -> str:
                                      selector=args.get("selector", ""),
                                      x=args.get("x"), y=args.get("y"),
                                      text=args.get("text", ""))
+    if name == "browser_detect":
+        from kairos import browsers
+        choices = browsers.list_choices()
+        if not choices:
+            return "(no browsers detected)"
+        return "\n".join(
+            f"- {c.get('name')}{' (running)' if c.get('running') else ''} [{c.get('id')}]"
+            for c in choices)
+    if name == "browser_start":
+        return str(engine.browser_start(choice_id=args.get("choice"),
+                                        url=args.get("url"), mode=args.get("mode")))
+    if name == "browser_goto":
+        return engine.browser_goto(args.get("url", ""))
+    if name == "browser_fill":
+        return engine.browser_fill(selector=args.get("selector", ""),
+                                   label=args.get("label"),
+                                   value=args.get("value") or args.get("text", ""))
+    if name == "browser_click":
+        if args.get("text"):
+            return engine.browser_click_text(args.get("text"))
+        return engine.browser_click(args.get("selector", ""))
+    if name == "browser_read":
+        from kairos import browser
+        return browser.session_do("text", selector=args.get("selector"))
+    if name == "browser_form":
+        return engine.browser_form(args.get("fields") or {})
+    if name == "browser_design":
+        res = engine.design_task(args.get("goal", ""), url=args.get("url"))
+        return res.get("result", str(res))
+    if name == "browser_captcha":
+        from kairos import browser
+        return str(browser.session_detect_captcha())
     raise PermissionError(f"Unknown or disallowed tool '{name}'.")

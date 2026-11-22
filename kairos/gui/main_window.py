@@ -380,7 +380,7 @@ class KairosGUI(QMainWindow):
 
         tools_menu = menubar.addMenu("&Tools")
         tools_menu.addAction("Predictive Engine", self.open_predict_dialog)
-        self._designer_action = tools_menu.addAction("Web Designer (browser)\u2026",
+        self._designer_action = tools_menu.addAction("Browser Agent\u2026",
                                                      self.open_designer_dialog)
         tools_menu.addAction("Drawings & Design\u2026", self.open_artifacts_dialog)
 
@@ -543,6 +543,7 @@ class KairosGUI(QMainWindow):
             ("Peripherals", "peripherals", self.open_peripheral_dialog),
             ("Character", None, self.open_character_dialog),
             ("Graph", None, self.open_graph_dialog),
+            ("Browser Agent", None, self.open_designer_dialog),
             ("Self-Reflect", None, self.run_reflection),
         ]
         self._toolbar_buttons = {}
@@ -573,6 +574,7 @@ class KairosGUI(QMainWindow):
             "Downloads",
             "Peripheral Control",
             "Predictive Engine",
+            "Browser Agent",
             "Self-Reflect",
             "Create / View Skills",
         ])
@@ -586,6 +588,7 @@ class KairosGUI(QMainWindow):
             "Downloads": "download_media",
             "Peripheral Control": "peripherals",
             "Predictive Engine": "predict",
+            "Browser Agent": None,
             "Self-Reflect": None,
             "Create / View Skills": "skills_manage",
         }
@@ -1178,8 +1181,10 @@ class KairosGUI(QMainWindow):
             self._webhook_action.setEnabled(allowed("webhook"))
         except Exception:
             pass
+        # Browser Agent is intentionally always reachable (the dialog offers to
+        # grant the capability to a custom character if needed).
         try:
-            self._designer_action.setEnabled(allowed("browser_control"))
+            self._designer_action.setEnabled(True)
         except Exception:
             pass
 
@@ -1197,6 +1202,7 @@ class KairosGUI(QMainWindow):
             "Downloads": self._tool_download,
             "Peripheral Control": self.open_peripheral_dialog,
             "Predictive Engine": self.open_predict_dialog,
+            "Browser Agent": self.open_designer_dialog,
             "Self-Reflect": self.run_reflection,
             "Create / View Skills": self.open_skill_dialog,
         }

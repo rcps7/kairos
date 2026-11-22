@@ -288,17 +288,35 @@ class DesignWorker(QThread):
     finished = Signal(dict)
     failed = Signal(str)
 
-    def __init__(self, engine, goal, url):
+    def __init__(self, engine, goal, url, vision=None):
         super().__init__()
         self.engine = engine
         self.goal = goal
         self.url = url
+        self.vision = vision
 
     def run(self):
         try:
-            res = self.engine.design_task(self.goal, url=self.url,
+            res = self.engine.design_task(self.goal, url=self.url, vision=self.vision,
                                           progress=lambda t: self.progress.emit(t))
             self.finished.emit(res)
+        except Exception as e:
+            self.failed.emit(str(e))
+
+
+class BrowserCallWorker(QThread):
+    """Run an arbitrary browser callable off the UI thread."""
+
+    finished = Signal(object)
+    failed = Signal(str)
+
+    def __init__(self, fn):
+        super().__init__()
+        self.fn = fn
+
+    def run(self):
+        try:
+            self.finished.emit(self.fn())
         except Exception as e:
             self.failed.emit(str(e))
 

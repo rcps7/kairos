@@ -111,3 +111,41 @@ def test_provider_model_selector_populated():
     assert gui.model_combo.currentData() or gui.model_combo.currentText()
 
     gui.deleteLater()
+
+def test_browser_agent_entry_present():
+    _app()
+    gui = KairosGUI(_Engine())
+    texts = [gui.skills_list.item(i).text() for i in range(gui.skills_list.count())]
+    assert "Browser Agent" in texts
+    assert "Browser Agent" in gui._toolbar_buttons
+    assert gui._toolbar_buttons["Browser Agent"][0].isEnabled()
+    assert gui._designer_action.isEnabled()
+    gui.deleteLater()
+
+
+class _BrowserEngine:
+    def __init__(self):
+        self.config = {"browser": {"enabled": False, "mode": "ask"}}
+
+    def can(self, cap):
+        return True
+
+    def active_character_profile(self):
+        return {"name": "General", "capabilities": None}
+
+    def browser_detect(self):
+        return {"choices": [{"id": "msedge", "name": "Microsoft Edge", "running": True}],
+                "debug_endpoint": None}
+
+    def save_character(self, profile):
+        return profile
+
+
+def test_browser_agent_dialog_constructs():
+    _app()
+    from kairos.gui.dialogs import BrowserAgentDialog, DesignerDialog
+    assert DesignerDialog is BrowserAgentDialog
+    dlg = BrowserAgentDialog(_BrowserEngine())
+    assert dlg.windowTitle() == "Browser Agent"
+    assert dlg.mode_combo.count() == 3
+    dlg.deleteLater()

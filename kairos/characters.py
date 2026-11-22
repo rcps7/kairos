@@ -156,6 +156,21 @@ class CharacterManager:
             if fallback:
                 profiles[GENERAL_ID] = self._write_profile(fallback, builtin=True)
 
+        # Keep packaged built-in capabilities current (e.g. newly added tools
+        # such as browser_control). Built-ins are read-only, so syncing their
+        # capability list from the packaged presets is safe and automatic.
+        preset_by_id = {p["id"]: p for p in PRESETS}
+        for cid, data in list(profiles.items()):
+            if not data.get("builtin") or cid not in preset_by_id:
+                continue
+            preset_caps = preset_by_id[cid].get("capabilities")
+            if data.get("capabilities") != preset_caps:
+                data["capabilities"] = preset_caps
+                try:
+                    self._write_profile(data, builtin=True)
+                except Exception:
+                    logger.exception("Failed to sync capabilities for '%s'.", cid)
+
         self.profiles = profiles
         if self.active_id not in profiles:
             self.active_id = GENERAL_ID

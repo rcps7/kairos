@@ -1,6 +1,6 @@
 # KAIROS Roadmap
 
-Current version: **0.16.3** · License: GNU General Public License v3.0 (GPLv3) ·
+Current version: **0.16.5** · License: GNU General Public License v3.0 (GPLv3) ·
 Developed by RC · Repo: https://github.com/rcps7/kairos
 
 This document tracks shipped functionality and the forward plan. Each release is
@@ -9,7 +9,7 @@ published on GitHub Releases with a **signed** `KAIROS-agent-bundle.zip` (plus
 digest and the Ed25519 signature against the pinned public key.
 
 Verification gates for every release: `python -m compileall kairos`,
-`python -m kairos.evaluation` (18/18) and `python -m pytest -q tests` (82 passing).
+`python -m kairos.evaluation` (19/19) and `python -m pytest -q tests` (102 passing).
 
 ---
 
@@ -54,6 +54,8 @@ Verification gates for every release: `python -m compileall kairos`,
 | 0.16.1 | Graph recovery | Non-destructive knowledge-graph repair: `graph_memory.quarantine_wal` (backup + quarantine a corrupt WAL), auto-repair on startup (`graph_memory.auto_repair`), GUI **Repair / Rebuild**, Telegram `/graphrepair`, CLI `python -m kairos.graph_memory diagnose\|recover\|rebuild`. Source data (`knowledge.db`, `graph_pending.db`) is never touched. |
 | 0.16.2 | Chat UX fixes | Fixed the Plan/Execute dropdown being disabled (mode state tracked explicitly; `activated` signal so re-picking works). Added a **provider & model selector** below the chat box with a live `GET /models` refresh, caching (`llm_models_cache`) and a daily background refresh. |
 | 0.16.3 | Design tools | Web Designer dialog now has **Enable browser session** / **Enable JS** toggles and an **Install Chromium (Playwright)** button (fixes "Browser session is disabled"). Renamed **Drawings & Documents** → **Drawings & Design**; the dialog now **generates SVG from a description** via the LLM (`draw_from_description`) and adds a confirmed **Delete Selected**. |
+| 0.16.4 | License | Relicensed to the **GNU General Public License v3.0 (GPLv3)** (`LICENSE` + new `NOTICE`); "Developed by RC" added to the About dialog, README, ROADMAP, repo description and GPLv3 header. Bundle now ships `NOTICE` (matching the updater's `PROGRAM_FILES`). |
+| 0.16.5 | Browser Agent | Renamed **Web Designer → Browser Agent** (left panel + toolbar + Tools menu; always reachable; `browser_control` granted to all built-ins). Detects installed/running browsers and can **launch controlled** (Chrome/Edge/Brave/Vivaldi/Opera/Firefox) or **attach** over CDP. Rich actions: browse, fill/type, click by selector/text/coords, form fill, uploads (gated), JS (gated), screenshots, CAPTCHA detection + human-in-the-loop, and a goal-driven design loop with optional vision assist and `ask_user`. New modules `browsers.py`; tools `browser_*`; Telegram `/browser`. |
 
 Plan A is **fully complete**; Plan B's wave backlog is **fully complete**.
 

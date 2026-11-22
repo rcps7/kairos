@@ -126,9 +126,17 @@ DEFAULT_CONFIG = {
     },
     "browser": {
         "enabled": False,
+        "mode": "ask",
+        "selected": None,
+        "executable": None,
+        "channel": None,
+        "attach_url": None,
         "headless": False,
         "profile_dir": None,
         "allow_js_eval": False,
+        "allow_uploads": False,
+        "vision_assist": False,
+        "captcha": {"mode": "manual"},
         "viewport": {"width": 1280, "height": 800},
         "slow_mo": 0
     },

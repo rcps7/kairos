@@ -133,6 +133,16 @@ def _check_graph_recovery():
     assert (d / "g.lbdb").exists() and not (d / "g.lbdb.wal").exists()
 
 
+def _check_browser_agent():
+    from kairos import browsers, browser, toolkit
+    assert browsers.resolve_choice("playwright-chromium")["family"] == "chromium"
+    assert hasattr(browser, "session_do") and hasattr(browser, "session_start")
+    names = [t["function"]["name"] for t in toolkit.TOOL_SCHEMAS]
+    for n in ("browser_detect", "browser_start", "browser_fill", "browser_click",
+              "browser_design"):
+        assert n in names, f"missing tool {n}"
+
+
 def _check_release_signing():
     from cryptography.hazmat.primitives import serialization
     from kairos import release_signing
@@ -175,6 +185,7 @@ CHECKS = [
     ("modes", _check_modes),
     ("mcp extras", _check_mcp_extras),
     ("graph recovery", _check_graph_recovery),
+    ("browser agent", _check_browser_agent),
 ]
 
 

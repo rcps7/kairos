@@ -1,4 +1,5 @@
 import html
+import json
 import math
 import sys
 import time
@@ -2861,62 +2862,153 @@ class ArtifactsDialog(QDialog):
             QMessageBox.warning(self, "Kairos", f"Save failed: {e}")
 
 
-class DesignerDialog(QDialog):
-    """Drive a persistent headed browser toward a design goal (e.g. EasyEDA)."""
+class BrowserAgentDialog(QDialog):
+    """Browser Agent: drive a real browser to browse, fill forms and design."""
 
     def __init__(self, engine, parent=None):
         super().__init__(parent)
         self.engine = engine
-        self.setWindowTitle("Web Designer (headed browser)")
+        self._choices = []
+        self._workers = []
+        self.setWindowTitle("Browser Agent")
         self.setStyleSheet(_dialog_style())
-        self.resize(840, 680)
+        self.resize(920, 780)
         layout = QVBoxLayout(self)
+
+        self.cap_banner = QLabel("")
+        self.cap_banner.setWordWrap(True)
+        self.cap_banner.setStyleSheet(f"color: {GREEN_DIM};")
+        layout.addWidget(self.cap_banner)
+        self._update_cap_banner()
 
         bcfg = engine.config.get("browser", {}) or {}
 
-        settings = QGroupBox("Browser session")
-        sf = QVBoxLayout(settings)
-        self.enable_chk = QCheckBox("Enable browser session (browser.enabled)")
+        # --- Session ---
+        sess = QGroupBox("Browser")
+        sg = QVBoxLayout(sess)
+        row1 = QHBoxLayout()
+        row1.addWidget(QLabel("Browser:"))
+        self.browser_combo = QComboBox()
+        self.browser_combo.setMinimumWidth(240)
+        row1.addWidget(self.browser_combo, 1)
+        self.detect_btn = QPushButton("Detect")
+        self.detect_btn.clicked.connect(self._detect)
+        row1.addWidget(self.detect_btn)
+        row1.addWidget(QLabel("Mode:"))
+        self.mode_combo = QComboBox()
+        self.mode_combo.addItem("Auto (attach if possible)", "ask")
+        self.mode_combo.addItem("Launch controlled", "launch")
+        self.mode_combo.addItem("Attach (CDP)", "attach")
+        idx = self.mode_combo.findData(bcfg.get("mode", "ask"))
+        if idx >= 0:
+            self.mode_combo.setCurrentIndex(idx)
+        self.mode_combo.currentIndexChanged.connect(self._apply_settings)
+        row1.addWidget(self.mode_combo)
+        sg.addLayout(row1)
+
+        row2 = QHBoxLayout()
+        self.enable_chk = QCheckBox("Enable browser session")
         self.enable_chk.setChecked(bool(bcfg.get("enabled")))
-        self.enable_chk.toggled.connect(self._apply_browser_settings)
-        self.js_chk = QCheckBox("Enable JavaScript evaluation (browser.allow_js_eval)")
+        self.enable_chk.toggled.connect(self._apply_settings)
+        self.js_chk = QCheckBox("Allow JS evaluation")
         self.js_chk.setChecked(bool(bcfg.get("allow_js_eval")))
-        self.js_chk.toggled.connect(self._apply_browser_settings)
-        install_row = QHBoxLayout()
+        self.js_chk.toggled.connect(self._apply_settings)
+        self.up_chk = QCheckBox("Allow uploads")
+        self.up_chk.setChecked(bool(bcfg.get("allow_uploads")))
+        self.up_chk.toggled.connect(self._apply_settings)
+        self.vision_chk = QCheckBox("Vision assist")
+        self.vision_chk.setChecked(bool(bcfg.get("vision_assist")))
+        self.vision_chk.toggled.connect(self._apply_settings)
+        row2.addWidget(self.enable_chk)
+        row2.addWidget(self.js_chk)
+        row2.addWidget(self.up_chk)
+        row2.addWidget(self.vision_chk)
+        sg.addLayout(row2)
+
+        row3 = QHBoxLayout()
+        self.start_btn = QPushButton("Start / Attach")
+        self.start_btn.setStyleSheet(
+            f"background-color: {GREEN_DIM}; color: {BG_DARK}; font-weight: bold;")
+        self.start_btn.clicked.connect(self._start)
+        self.stop_btn = QPushButton("Stop")
+        self.stop_btn.clicked.connect(self._stop)
         self.install_btn = QPushButton("Install Chromium (Playwright)")
-        self.install_btn.setToolTip("Run: python -m playwright install chromium")
         self.install_btn.clicked.connect(self._install_chromium)
-        install_row.addWidget(self.install_btn)
-        install_row.addStretch()
-        sf.addWidget(self.enable_chk)
-        sf.addWidget(self.js_chk)
-        sf.addLayout(install_row)
-        layout.addWidget(settings)
+        self.grant_btn = QPushButton("Grant browser control")
+        self.grant_btn.clicked.connect(self._grant_capability)
+        row3.addWidget(self.start_btn)
+        row3.addWidget(self.stop_btn)
+        row3.addWidget(self.install_btn)
+        row3.addWidget(self.grant_btn)
+        row3.addStretch()
+        sg.addLayout(row3)
+        layout.addWidget(sess)
 
-        url_row = QHBoxLayout()
-        url_row.addWidget(QLabel("Start URL:"))
-        self.url_edit = QLineEdit("https://easyeda.com/editor")
-        url_row.addWidget(self.url_edit, 1)
-        open_btn = QPushButton("Open Session")
-        open_btn.clicked.connect(self._open)
-        url_row.addWidget(open_btn)
-        layout.addLayout(url_row)
+        # --- Browse ---
+        browse = QGroupBox("Browse")
+        bg = QVBoxLayout(browse)
+        brow = QHBoxLayout()
+        brow.addWidget(QLabel("URL:"))
+        self.url_edit = QLineEdit("https://www.google.com")
+        brow.addWidget(self.url_edit, 1)
+        for label, fn in (("Go", self._go), ("Back", self._back),
+                          ("Forward", self._forward), ("Reload", self._reload)):
+            b = QPushButton(label)
+            b.clicked.connect(fn)
+            brow.addWidget(b)
+        bg.addLayout(brow)
+        self.page_label = QLabel("No page open")
+        self.page_label.setStyleSheet(f"color: {TEXT_GREY};")
+        self.page_label.setWordWrap(True)
+        bg.addWidget(self.page_label)
+        layout.addWidget(browse)
 
-        layout.addWidget(QLabel("Design goal:"))
+        # --- Forms ---
+        form = QGroupBox("Fill form")
+        fg = QVBoxLayout(form)
+        frow = QHBoxLayout()
+        self.inputs_btn = QPushButton("List inputs")
+        self.inputs_btn.clicked.connect(self._list_inputs)
+        frow.addWidget(self.inputs_btn)
+        self.fill_btn = QPushButton("Fill form (JSON)")
+        self.fill_btn.clicked.connect(self._fill_form)
+        frow.addWidget(self.fill_btn)
+        frow.addStretch()
+        fg.addLayout(frow)
+        self.form_edit = QTextEdit()
+        self.form_edit.setFixedHeight(64)
+        self.form_edit.setPlaceholderText('{"Email": "a@b.com", "Name": "RC"}')
+        fg.addWidget(self.form_edit)
+        layout.addWidget(form)
+
+        # --- Design ---
+        design = QGroupBox("Design task")
+        dg = QVBoxLayout(design)
         self.goal_edit = QTextEdit()
         self.goal_edit.setPlaceholderText(
-            "e.g. On EasyEDA, create a schematic with an ESP32-S3, a 3.3V regulator, "
-            "and a USB-C connector, then place and label the components.")
-        self.goal_edit.setFixedHeight(80)
-        layout.addWidget(self.goal_edit)
-
-        self.run_btn = QPushButton("Run Design Task")
-        self.run_btn.setStyleSheet(f"background-color: {GREEN_DIM}; color: {BG_DARK}; font-weight: bold;")
+            "e.g. On EasyEDA, place an ESP32-S3, a 3.3V regulator and a USB-C "
+            "connector, then wire and label them.")
+        self.goal_edit.setFixedHeight(64)
+        dg.addWidget(self.goal_edit)
+        drow = QHBoxLayout()
+        self.run_btn = QPushButton("Run design task")
+        self.run_btn.setStyleSheet(
+            f"background-color: {GREEN_DIM}; color: {BG_DARK}; font-weight: bold;")
         self.run_btn.clicked.connect(self._run)
-        layout.addWidget(self.run_btn)
+        drow.addWidget(self.run_btn)
+        self.captcha_btn = QPushButton("Detect CAPTCHA")
+        self.captcha_btn.clicked.connect(self._detect_captcha)
+        drow.addWidget(self.captcha_btn)
+        self.wait_captcha_btn = QPushButton("Wait until CAPTCHA solved")
+        self.wait_captcha_btn.clicked.connect(self._wait_captcha)
+        drow.addWidget(self.wait_captcha_btn)
+        drow.addStretch()
+        dg.addLayout(drow)
+        layout.addWidget(design)
 
         self.status = QLabel("")
         self.status.setStyleSheet(f"color: {TEXT_GREY};")
+        self.status.setWordWrap(True)
         layout.addWidget(self.status)
 
         self.out = QTextBrowser()
@@ -2927,64 +3019,143 @@ class DesignerDialog(QDialog):
         close.clicked.connect(self.accept)
         layout.addWidget(close)
 
-        if not self.enable_chk.isChecked():
-            self.status.setText("Browser session is disabled \u2014 tick 'Enable browser "
-                                "session' above (and install Chromium if needed).")
+        self._detect()
 
-    def _apply_browser_settings(self, _checked=False):
-        enabled = self.enable_chk.isChecked()
-        js = self.js_chk.isChecked()
-
-        def _mutate(c):
-            b = c.setdefault("browser", {})
-            b["enabled"] = enabled
-            b["allow_js_eval"] = js
-
+    # -- capability -------------------------------------------------------
+    def _update_cap_banner(self):
         try:
-            self.engine.config = _merge_save(_mutate)
-        except Exception as e:
-            self.status.setText(f"Could not save browser settings: {e}")
-            return
-        self.status.setText("Browser session enabled." if enabled
-                            else "Browser session disabled.")
-
-    def _ensure_enabled(self) -> bool:
-        from kairos import browser
-        try:
-            if browser.session_enabled():
-                return True
+            ok = self.engine.can("browser_control")
         except Exception:
-            pass
-        if QMessageBox.question(
-                self, "Enable Browser Session",
-                "The browser session is disabled. Enable it now?",
-                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes) != QMessageBox.Yes:
-            return False
-        self.enable_chk.setChecked(True)   # triggers _apply_browser_settings
-        return True
-
-    def _open(self):
-        if not self._ensure_enabled():
+            ok = True
+        if ok:
+            self.cap_banner.setText("")
             return
-        url = self.url_edit.text().strip()
-        self.status.setText("Opening session (a Chromium window should appear)\u2026")
-        self.worker = BrowserOpenWorker(self.engine, url)
-        self.worker.finished.connect(self._on_open_done)
-        self.worker.start()
+        try:
+            prof = self.engine.active_character_profile()
+        except Exception:
+            prof = {}
+        self.cap_banner.setText(
+            f"The active character '{prof.get('name', '?')}' lacks browser control. "
+            "Use 'Grant browser control' (custom characters) or switch to General.")
 
-    def _on_open_done(self, text):
-        if text.startswith("[Error]"):
-            self.status.setText(text)
+    def _grant_capability(self):
+        try:
+            prof = dict(self.engine.active_character_profile())
+            caps = list(prof.get("capabilities") or [])
+            if "browser_control" not in caps:
+                caps.append("browser_control")
+            prof["capabilities"] = caps
+            self.engine.save_character(prof)
+            import kairos.config as _cfg
+            self.engine.config = _cfg.load_config()
+            self.status.setText("Browser control enabled for this character.")
+            self._update_cap_banner()
+        except Exception as e:
+            self.status.setText(f"Could not enable (built-in? switch to General): {e}")
+
+    # -- settings ---------------------------------------------------------
+    def _apply_settings(self, _=False):
+        def _mut(c):
+            b = c.setdefault("browser", {})
+            b["enabled"] = self.enable_chk.isChecked()
+            b["allow_js_eval"] = self.js_chk.isChecked()
+            b["allow_uploads"] = self.up_chk.isChecked()
+            b["vision_assist"] = self.vision_chk.isChecked()
+            b["mode"] = self.mode_combo.currentData()
+        try:
+            self.engine.config = _merge_save(_mut)
+        except Exception as e:
+            self.status.setText(f"Could not save settings: {e}")
+
+    # -- worker helper ----------------------------------------------------
+    def _call(self, fn, on_ok=None, busy=None):
+        if busy:
+            self.status.setText(busy)
+        w = BrowserCallWorker(fn)
+        self._workers.append(w)
+
+        def _cleanup(*_a):
+            try:
+                self._workers.remove(w)
+            except Exception:
+                pass
+
+        w.finished.connect(_cleanup)
+        w.failed.connect(_cleanup)
+        w.finished.connect(lambda r: self._on_call_done(r, on_ok))
+        w.failed.connect(self._on_call_fail)
+        w.start()
+
+    def _on_call_done(self, result, on_ok):
+        if on_ok:
+            try:
+                on_ok(result)
+            except Exception as e:
+                self.status.setText(f"Error: {e}")
         else:
-            self.status.setText("Session open.")
-        self.out.setPlainText(text)
+            self.status.setText("Done.")
+            self.out.setPlainText(str(result))
+
+    def _on_call_fail(self, msg):
+        self.status.setText(f"Error: {msg}")
+        self.out.setPlainText(f"[Error] {msg}")
+
+    # -- detection / lifecycle -------------------------------------------
+    def _detect(self):
+        self.status.setText("Detecting browsers\u2026")
+        self._call(lambda: self.engine.browser_detect(), self._on_detected)
+
+    def _on_detected(self, res):
+        res = res or {}
+        choices = res.get("choices") or []
+        self._choices = choices
+        selected = (self.engine.config.get("browser", {}) or {}).get("selected")
+        self.browser_combo.blockSignals(True)
+        self.browser_combo.clear()
+        for c in choices:
+            label = (c.get("name") or c.get("id") or "?")
+            if c.get("running"):
+                label += " (running)"
+            self.browser_combo.addItem(label, c.get("id"))
+        if selected:
+            for i in range(self.browser_combo.count()):
+                if self.browser_combo.itemData(i) == selected:
+                    self.browser_combo.setCurrentIndex(i)
+                    break
+        self.browser_combo.blockSignals(False)
+        cdp = res.get("debug_endpoint")
+        msg = f"Detected {len(choices)} browser(s)."
+        if cdp:
+            msg += f" CDP endpoint at {cdp.get('url')} ({cdp.get('label')})."
+        self.status.setText(msg)
+
+    def _start(self):
+        if not self.enable_chk.isChecked():
+            self.enable_chk.setChecked(True)
+        choice = self.browser_combo.currentData()
+        mode = self.mode_combo.currentData()
+        url = self.url_edit.text().strip()
+        self._call(lambda: self.engine.browser_start(choice_id=choice, url=url, mode=mode),
+                   self._on_started, busy=f"Starting {choice or 'browser'}\u2026")
+
+    def _on_started(self, info):
+        info = info or {}
+        self.status.setText(
+            f"Session: {info.get('browser', '?')} [{info.get('mode', '?')}]")
+        self.page_label.setText(f"{info.get('title', '')} \u2014 {info.get('url', '')}")
+        self.out.setPlainText(json.dumps(info, indent=2))
+        self._refresh_info()
+
+    def _stop(self):
+        self._call(lambda: self.engine.browser_stop(),
+                   lambda r: self.status.setText(str(r)))
 
     def _install_chromium(self):
         self.status.setText("Installing Chromium (this may take a few minutes)\u2026")
         self.install_btn.setEnabled(False)
-        self.worker = PlaywrightInstallWorker()
-        self.worker.finished.connect(self._on_install_done)
-        self.worker.start()
+        self._install_worker = PlaywrightInstallWorker()
+        self._install_worker.finished.connect(self._on_install_done)
+        self._install_worker.start()
 
     def _on_install_done(self, text):
         self.install_btn.setEnabled(True)
@@ -2992,32 +3163,103 @@ class DesignerDialog(QDialog):
                             if not text.startswith("[Error]") else text)
         self.out.setPlainText(text)
 
+    # -- browsing ---------------------------------------------------------
+    def _refresh_info(self):
+        self._call(lambda: self.engine.browser_info(), self._on_info)
+
+    def _on_info(self, info):
+        if info and info.get("running"):
+            self.page_label.setText(f"{info.get('title', '')} \u2014 {info.get('url', '')}")
+
+    def _go(self):
+        url = self.url_edit.text().strip()
+        self._call(lambda: self.engine.browser_goto(url), self._on_after,
+                   busy=f"Opening {url}\u2026")
+
+    def _back(self):
+        from kairos import browser
+        self._call(lambda: browser.session_do("back"), self._on_after)
+
+    def _forward(self):
+        from kairos import browser
+        self._call(lambda: browser.session_do("forward"), self._on_after)
+
+    def _reload(self):
+        from kairos import browser
+        self._call(lambda: browser.session_do("reload"), self._on_after)
+
+    def _on_after(self, result):
+        self.out.setPlainText(str(result))
+        self.status.setText("Done.")
+        self._refresh_info()
+
+    def _list_inputs(self):
+        self._call(lambda: self.engine.browser_list_inputs(), self._on_inputs,
+                   busy="Reading inputs\u2026")
+
+    def _on_inputs(self, items):
+        self.out.setPlainText(json.dumps(items or [], indent=2))
+        self.status.setText(f"{len(items or [])} input(s) found.")
+
+    def _fill_form(self):
+        try:
+            fields = json.loads(self.form_edit.toPlainText() or "{}")
+        except Exception as e:
+            QMessageBox.warning(self, "Browser Agent", f"Invalid JSON: {e}")
+            return
+        self._call(lambda: self.engine.browser_form(fields), self._on_after,
+                   busy="Filling form\u2026")
+
+    # -- design / captcha -------------------------------------------------
     def _run(self):
         goal = self.goal_edit.toPlainText().strip()
         if not goal:
-            QMessageBox.warning(self, "Kairos", "Enter a design goal.")
+            QMessageBox.warning(self, "Browser Agent", "Enter a design/browse goal.")
             return
-        if not self._ensure_enabled():
-            return
+        if not self.enable_chk.isChecked():
+            self.enable_chk.setChecked(True)
         url = self.url_edit.text().strip()
         self.run_btn.setEnabled(False)
-        self.status.setText("Running design task\u2026")
+        self.status.setText("Running task\u2026")
         self.out.clear()
-        self.worker = DesignWorker(self.engine, goal, url)
-        self.worker.progress.connect(lambda t: self.status.setText(t))
-        self.worker.finished.connect(self._done)
-        self.worker.failed.connect(self._failed)
-        self.worker.start()
+        self._design_worker = DesignWorker(self.engine, goal, url,
+                                           vision=self.vision_chk.isChecked())
+        self._design_worker.progress.connect(lambda t: self.status.setText(t))
+        self._design_worker.finished.connect(self._design_done)
+        self._design_worker.failed.connect(self._design_failed)
+        self._design_worker.start()
 
-    def _done(self, res):
+    def _design_done(self, res):
         self.run_btn.setEnabled(True)
         self.status.setText("Done.")
         self.out.setPlainText(str(res.get("result", res)))
+        self._refresh_info()
 
-    def _failed(self, msg):
+    def _design_failed(self, msg):
         self.run_btn.setEnabled(True)
         self.status.setText("Failed.")
         self.out.setPlainText(f"[Error] {msg}")
+
+    def _detect_captcha(self):
+        self._call(lambda: self.engine.browser_detect_captcha(), self._on_captcha,
+                   busy="Checking for CAPTCHA\u2026")
+
+    def _on_captcha(self, found):
+        if found:
+            self.status.setText(
+                f"CAPTCHA detected: {', '.join(found)} \u2014 solve it in the "
+                "browser window, then click 'Wait until CAPTCHA solved'.")
+        else:
+            self.status.setText("No CAPTCHA detected.")
+
+    def _wait_captcha(self):
+        self.status.setText("Waiting for you to solve the CAPTCHA in the browser\u2026")
+        self._call(lambda: self.engine.browser_wait_captcha(300000),
+                   lambda r: self.status.setText(str(r)))
+
+
+# Backwards-compatible alias.
+DesignerDialog = BrowserAgentDialog
 
 
 def _open_path(path):

@@ -247,11 +247,90 @@ class KairosEngine:
             step_cb = lambda i, a, d: progress(f"step {i}: {a}")
         return computer.run(self, goal, start_url=url, on_step=step_cb)
 
-    # ---- Browser session / web-page design ----
-    def browser_session_open(self, url: str = "") -> str:
+    # ---- Browser Agent ----
+    def browser_choices(self) -> list:
+        """Installed + running browsers (and a bundled Playwright fallback)."""
+        from kairos import browsers
+        return browsers.list_choices()
+
+    def browser_detect(self) -> dict:
+        from kairos import browsers
+        return {"choices": browsers.list_choices(),
+                "debug_endpoint": browsers.detect_debug_endpoint()}
+
+    def browser_start(self, choice_id: str = None, url: str = None,
+                      mode: str = None) -> dict:
         self.require("browser_control")
         from kairos import browser
-        return browser.session_open(url)
+        try:
+            return browser.session_start(choice_id=choice_id, url=url, mode=mode)
+        except Exception as e:
+            self.record_error("browser.start", e)
+            raise
+
+    def browser_info(self) -> dict:
+        from kairos import browser
+        return browser.session_info()
+
+    def browser_stop(self) -> str:
+        from kairos import browser
+        return browser.session_close()
+
+    def browser_goto(self, url: str) -> str:
+        self.require("browser_control")
+        from kairos import browser
+        return browser.session_do("goto", url=url)
+
+    def browser_fill(self, selector: str = "", value: str = "", label: str = None) -> str:
+        self.require("browser_control")
+        from kairos import browser
+        return browser.session_do("fill", selector=selector or label, text=value)
+
+    def browser_click(self, selector: str = "") -> str:
+        self.require("browser_control")
+        from kairos import browser
+        return browser.session_do("click", selector=selector)
+
+    def browser_click_text(self, text: str) -> str:
+        self.require("browser_control")
+        from kairos import browser
+        return browser.session_do("click_text", text=text)
+
+    def browser_type(self, selector: str, text: str) -> str:
+        self.require("browser_control")
+        from kairos import browser
+        return browser.session_do("type", selector=selector, text=text)
+
+    def browser_press(self, key: str = "Enter") -> str:
+        self.require("browser_control")
+        from kairos import browser
+        return browser.session_do("press", text=key)
+
+    def browser_form(self, fields: dict) -> str:
+        self.require("browser_control")
+        from kairos import browser
+        return browser.session_do("fill_form", fields=fields or {})
+
+    def browser_list_inputs(self) -> list:
+        from kairos import browser
+        return browser.session_list_inputs()
+
+    def browser_outline(self) -> dict:
+        from kairos import browser
+        return browser.session_outline()
+
+    def browser_screenshot(self) -> str:
+        self.require("browser_control")
+        from kairos import browser
+        return browser.session_screenshot()
+
+    def browser_detect_captcha(self) -> list:
+        from kairos import browser
+        return browser.session_detect_captcha()
+
+    def browser_wait_captcha(self, timeout_ms: int = 300000) -> str:
+        from kairos import browser
+        return browser.session_wait_captcha(timeout_ms)
 
     def browser_eval_js(self, script: str, url: str = None) -> str:
         self.require("browser_control")
@@ -262,6 +341,11 @@ class KairosEngine:
             self.record_error("browser.js", e)
             raise
 
+    def browser_session_open(self, url: str = "") -> str:
+        self.require("browser_control")
+        from kairos import browser
+        return browser.session_open(url)
+
     def browser_mouse(self, action: str, **kwargs) -> str:
         self.require("browser_control")
         from kairos import browser
@@ -271,14 +355,18 @@ class KairosEngine:
         from kairos import browser
         return browser.session_close()
 
-    def design_task(self, goal: str, url: str = None, progress=None) -> dict:
-        """Drive a persistent headed browser toward a design goal (e.g. EasyEDA)."""
+    def design_task(self, goal: str, url: str = None, progress=None,
+                    vision: bool = None) -> dict:
+        """Drive a persistent browser toward a design goal (e.g. EasyEDA)."""
         self.require("browser_control")
         from kairos import computer
+        if vision is None:
+            vision = bool((self.config.get("browser", {}) or {}).get("vision_assist", False))
         step_cb = None
         if progress:
             step_cb = lambda i, a, d: progress(f"step {i}: {a}")
-        return computer.run(self, goal, start_url=url, on_step=step_cb, use_session=True)
+        return computer.run(self, goal, start_url=url, on_step=step_cb,
+                            use_session=True, vision=vision)
 
     def add_scheduled_task(self, name: str, kind: str, payload: str, interval_seconds: int):
         return self.scheduler.add(name, kind, payload, interval_seconds)

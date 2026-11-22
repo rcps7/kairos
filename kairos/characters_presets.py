@@ -53,6 +53,7 @@ RESEARCH_CAPS = [
     "predict",
     "council",
     "skills_run",
+    "browser_control",
 ]
 
 GENERAL_PROMPT = (

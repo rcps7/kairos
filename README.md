@@ -61,7 +61,7 @@ Licensed under the **GNU General Public License v3.0 (GPLv3)**. **Developed by R
 | Git & version-control workflows (system `git`, confined, opt-in push/pull) | GUI / Telegram |
 | Webhooks — inbound triggers + outbound notifications (loopback `127.0.0.1:8765`) | HTTP / GUI / Telegram |
 | Draw diagrams (SVG) & write documents to the Artifacts folder | GUI / Telegram |
-| Web-page design via a persistent, headed browser (e.g. EasyEDA) | GUI / Telegram |
+| **Browser Agent** — detect/choose a real browser, browse, fill forms, CAPTCHA assist, online design (EasyEDA) | GUI / Telegram |
 | MCP server — resources, prompts & tools over stdio | `python -m kairos.mcp_server` |
 | CLI + GUI front-ends | `run.bat` / `python -m kairos.main` |
 
@@ -195,7 +195,7 @@ buttons**, and is divided into three panes:
 |------|---------|
 | **File** | New Session (`Ctrl+N`), Exit, Kill Switch (Emergency) |
 | **Edit** | LLM Providers, Storage Settings, Email Settings, Telegram Settings…, Peripheral Control, Retention (Delete Expired), Skills, Agent Character…, Knowledge Graph…, Pending Knowledge…, Git & Version Control…, Webhook… |
-| **Tools** | Predictive Engine, Web Designer (browser)…, Drawings & Design… |
+| **Tools** | Predictive Engine, Browser Agent…, Drawings & Design… |
 | **Agent** | Settings…, Usage & Traces…, Plans & Tasks… |
 | **View** | Self-Reflect, Show Lessons, Refresh Status |
 | **Window** | Minimize, Maximize |
@@ -244,7 +244,15 @@ buttons**, and is divided into three panes:
 | `/draw <name> \| <svg or description>` | Draw an SVG diagram |
 | `/artifacts` | List drawings & design files |
 | `/webhooks` | Show webhook configuration |
-| `/design <url> \| <goal>` | Drive a headed browser to design a web page |
+| `/design <url> \| <goal>` | Alias of `/browser design` |
+| `/browser detect` | List installed/running browsers |
+| `/browser start [id]` | Start/attach the Browser Agent |
+| `/browser open <url>` | Navigate the Browser Agent |
+| `/browser fill <label> \| <value>` | Fill an input by label |
+| `/browser click <selector\|text>` | Click an element |
+| `/browser screenshot` | Screenshot the current page |
+| `/browser captcha` | Detect CAPTCHA widgets |
+| `/browser design <url> \| <goal>` | Run a design task |
 
 ---
 
@@ -919,32 +927,44 @@ Gated by the `artifacts` capability (`artifacts.enabled`, `artifacts.allow_svg`)
 
 ---
 
-## Web-Page Design (headed browser)
+## Browser Agent
 
-For design work on canvas/SVG editors such as **EasyEDA**, Kairos can drive a
-**persistent, headed Chromium** session and interact with the page:
+The **Browser Agent** drives a real web browser for you — browsing, filling web
+forms, handling CAPTCHAs with your help, and doing online design work such as
+wiring a PCB schematic in **EasyEDA**.
 
-- Open a real browser window and keep it open across actions.
-- Click/type by CSS selector, or click/drag at coordinates on a canvas.
-- Press keyboard keys.
-- Evaluate JavaScript (`browser.allow_js_eval`) to call the site's own editor API.
+- **Detect & choose a browser.** It finds installed browsers (Edge, Chrome, Brave,
+  Vivaldi, Opera, Firefox) and shows which are already running. It can **launch a
+  controlled** instance in a dedicated Kairos profile (leaving your session alone)
+  or **attach** to a Chromium started with `--remote-debugging-port` (CDP).
+- **Browse.** Go / Back / Forward / Reload any URL.
+- **Fill forms.** List detected inputs, or fill by label/name with a JSON map.
+- **Design.** A goal-driven loop navigates and acts on the page (click by
+  selector/text/coordinates, type, drag, keyboard, JS) for canvas editors such as
+  EasyEDA. Optional **Vision assist** uses a vision-capable model to locate
+  elements on a canvas.
+- **CAPTCHA.** Kairos detects CAPTCHAs and pauses; you solve it in the visible
+  browser, then resume. No automated CAPTCHA solving.
 
-Open **Tools → Web Designer (browser)…**. The dialog has **Enable browser
-session** and **Enable JavaScript evaluation** toggles (saved to the config), an
-**Install Chromium (Playwright)** button, a start URL and a design goal. Click
-**Open Session**, then **Run Design Task**. The task planner navigates, acts and
-observes the page (screenshots go to the Media folder). The same capability is
-exposed as tools `browser_open`, `browser_js`, `browser_mouse` and via Telegram
-`/design <url> | <goal>`, gated by the `browser_control` capability.
+Open it from the **left panel**, the **toolbar**, or **Tools → Browser Agent…**.
+The dialog has a browser dropdown + **Detect**, mode (Auto / Launch / Attach),
+**Start / Attach** and **Stop**, Browse controls, Fill-form (JSON), a design goal
+with **Run design task**, and CAPTCHA Detect / Wait buttons. Toggles: Enable
+browser session, Allow JS evaluation, Allow uploads, Vision assist.
 
-The session is **off by default**. Tick **Enable browser session** in the dialog
-(or set `browser.enabled`), install Chromium once via the dialog's button (or
-`python -m playwright install chromium`), and optionally enable JavaScript
-evaluation (`browser.allow_js_eval`) to let the agent call the site's own editor
-API. If you try to open a session while it is disabled, Kairos offers to enable it.
+Tools: `browser_detect`, `browser_start`, `browser_goto`, `browser_fill`,
+`browser_click`, `browser_read`, `browser_form`, `browser_design`,
+`browser_captcha` (gated by `browser_control`). Telegram:
+`/browser detect | start [id] | open <url> | fill <label>|<value> | click <sel> |
+screenshot | captcha | design <url>|<goal>` (`/design` is an alias).
 
-> Results depend on the target site's DOM/JS API; EasyEDA tasks are best-effort and
-> should be reviewed before you rely on them.
+The session is **off by default**. Enable it in the dialog (or `browser.enabled`);
+install Chromium once with the dialog's button (or `python -m playwright install
+chromium`). Installed browsers (Edge/Chrome/Firefox) are used when available, so
+the bundled Chromium is not always required.
+
+> CAPTCHA assistance is human-in-the-loop by design (reliable and ToS-safe).
+> Design results depend on the site's DOM/JS API and should be reviewed.
 
 ---
 
@@ -1067,7 +1087,7 @@ Location: `%USERPROFILE%\.kairos\config.json`
 - `agent.mode` — default chat mode: `chat`, `plan`, or `execute`.
 - `git.*` — git integration (disabled by default); `git.token` is stored in the keyring (`git_token`).
 - `webhook.*` — webhook endpoint (disabled by default; loopback **`127.0.0.1:8765`**); `webhook.secret` and `webhook.outbound.secret` live in the keyring (`webhook_secret`, `webhook_outbound_secret`).
-- `browser.*` — persistent headed browser session (disabled by default); JS evaluation requires `browser.allow_js_eval`.
+- `browser.*` — Browser Agent (disabled by default): `enabled`, `mode` (launch/attach/ask), `selected`, `executable`, `channel`, `attach_url`, `headless`, `allow_js_eval`, `allow_uploads`, `vision_assist`, `captcha.mode`.
 - `artifacts.*` — drawing/document output (enabled by default).
 - `mcp.server.*` — expose Kairos as an MCP server (`enabled`, `expose_resources`, `expose_prompts`).
 
@@ -1099,7 +1119,8 @@ kairos/
 │   ├── artifacts.py            # draw (SVG) & write documents
 │   ├── planner.py              # durable plans (Plan/Execute modes)
 │   ├── browser.py              # Playwright one-shot + persistent session
-│   ├── computer.py             # browser computer-use loop
+│   ├── browsers.py             # installed/running browser detection + selection
+│   ├── computer.py             # browser computer-use / design loop
 │   ├── mcp_server.py           # MCP stdio server (tools/resources/prompts)
 │   ├── mcp_client.py           # MCP stdio client
 │   ├── llm/                    # multi-provider LLM client

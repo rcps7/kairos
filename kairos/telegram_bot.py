@@ -93,6 +93,7 @@ class TelegramBot:
                 ("execute", self.execute_command),
                 ("planagent", self.planagent_command),
                 ("design", self.design_command),
+                ("browser", self.browser_command),
                 ("kill", self.kill_command),
             ]
             for name, handler in commands:
@@ -393,6 +394,8 @@ class TelegramBot:
             "/write <file> | <content> - save a document\n"
             "/draw <name> | <desc> - draw an SVG diagram\n"
             "/design <url> | <goal> - drive a browser to design a page\n"
+            "/browser detect|start [id]|open <url>|fill <label>|<value>|click <sel>|"
+            "screenshot|captcha|design <url>|<goal>\n"
             "/webhooks - show webhook config\n"
             "/artifacts - list drawings & documents\n"
             "/whoami - show your Telegram user ID"
@@ -1049,6 +1052,88 @@ class TelegramBot:
         except Exception as e:
             out = f"Error: {e}"
         await update.message.reply_text(str(out)[:3800] or "(no output)")
+
+    async def browser_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        denied = self._capability_denied("browser_control")
+        if denied:
+            await update.message.reply_text(denied)
+            return
+        args = context.args or []
+        sub = (args[0] if args else "").lower()
+        usage = ("Usage: /browser detect | start [id] | open <url> | "
+                 "fill <label>|<value> | click <selector|text> | screenshot | "
+                 "captcha | design <url>|<goal>")
+        if not sub or sub == "help":
+            await update.message.reply_text(usage)
+            return
+        try:
+            if sub == "detect":
+                res = await asyncio.to_thread(self.engine.browser_detect)
+                lines = ["Browsers:"]
+                for c in res.get("choices", []):
+                    flag = " (running)" if c.get("running") else ""
+                    lines.append(f"- {c.get('name')}{flag} [{c.get('id')}]")
+                cdp = res.get("debug_endpoint")
+                if cdp:
+                    lines.append(f"CDP endpoint: {cdp.get('url')} ({cdp.get('label')})")
+                await update.message.reply_text("\n".join(lines)[:3800])
+                return
+            if sub == "start":
+                choice = args[1] if len(args) > 1 else None
+                info = await asyncio.to_thread(self.engine.browser_start,
+                                               choice, None, None)
+                await update.message.reply_text(f"Browser session: {info}"[:3800])
+                return
+            if sub == "open":
+                url = args[1] if len(args) > 1 else ""
+                out = await asyncio.to_thread(self.engine.browser_goto, url)
+                await update.message.reply_text(str(out)[:3800])
+                return
+            if sub == "screenshot":
+                path = await asyncio.to_thread(self.engine.browser_screenshot)
+                await update.message.reply_text(f"Screenshot saved: {path}"[:3800])
+                return
+            if sub == "captcha":
+                found = await asyncio.to_thread(self.engine.browser_detect_captcha)
+                await update.message.reply_text(f"CAPTCHA: {found or 'none detected'}")
+                return
+            if sub == "fill":
+                raw = " ".join(args[1:])
+                if "|" not in raw:
+                    await update.message.reply_text("Usage: /browser fill <label>|<value>")
+                    return
+                label, value = raw.split("|", 1)
+                out = await asyncio.to_thread(self.engine.browser_fill, "",
+                                              value.strip(), label.strip())
+                await update.message.reply_text(str(out)[:3800])
+                return
+            if sub == "click":
+                target = " ".join(args[1:]).strip()
+                if not target:
+                    await update.message.reply_text("Usage: /browser click <selector|text>")
+                    return
+                try:
+                    out = await asyncio.to_thread(self.engine.browser_click_text, target)
+                except Exception:
+                    out = await asyncio.to_thread(self.engine.browser_click, target)
+                await update.message.reply_text(str(out)[:3800])
+                return
+            if sub == "design":
+                raw = " ".join(args[1:])
+                if "|" not in raw:
+                    await update.message.reply_text("Usage: /browser design <url>|<goal>")
+                    return
+                url, goal = raw.split("|", 1)
+                await update.message.reply_text("Driving the browser (this may take a while)...")
+                res = await asyncio.to_thread(self.engine.design_task,
+                                              goal.strip(), url.strip())
+                await update.message.reply_text(
+                    str(res.get("result", res))[:3800] or "(no output)")
+                return
+        except Exception as e:
+            await update.message.reply_text(f"Browser error: {e}")
+            return
+        await update.message.reply_text(usage)
 
     async def kill_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Confirm before engaging the kill switch."""
