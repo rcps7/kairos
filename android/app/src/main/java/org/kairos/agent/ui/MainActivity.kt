@@ -188,8 +188,8 @@ fun CharacterScreen(app: KairosApp) {
     var active by remember { mutableStateOf(app.characters.activeId) }
     LazyColumn(Modifier.fillMaxSize().padding(12.dp)) {
         items(app.characters.all) { c ->
-            Card(Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                onClick = { app.characters.activeId = c.id; app.settings.activeCharacter = c.id; active = c.id }) {
+            Card(onClick = { app.characters.activeId = c.id; app.settings.activeCharacter = c.id; active = c.id },
+                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
                 Column(Modifier.padding(10.dp)) {
                     Text((if (active == c.id) "● " else "") + c.name, style = MaterialTheme.typography.titleMedium)
                     Text(c.description)
