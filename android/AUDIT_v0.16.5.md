@@ -34,3 +34,9 @@ Test result: **90 passed, 7 skipped, 1 failed** (GUI test module excluded) (`tes
 | B12 | `mcp_server.py` over stdio, `computer.py` | No stdio host; can't drive other apps without accessibility | Proposed exclusion; available via PC remote control |
 | B13 | Thread-local guards and provider-call lock (`main.py`, `llm/client.py`) | Python threading model | Coroutine dispatchers + `Mutex` |
 | B14 | Paths `%USERPROFILE%\.kairos` | Scoped storage | `Context.filesDir` + SAF for user folders |
+
+### Added during the Android port
+
+| # | Severity | Location | Problem | Suggested fix |
+|---|---|---|---|---|
+| A8 | Low | `kairos/main.py:1879-1883` (`fallback_models`) | `url in preset["api_url"]` is true when the provider URL is empty, so a Custom provider with no URL gets every preset's model list. | Skip the preset match when `url` is empty. |

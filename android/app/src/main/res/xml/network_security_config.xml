@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Cleartext HTTP is allowed because users configure their own endpoints (local LLM servers such as
+     Ollama/LM Studio, MiroFish on the LAN, the paired PC agent). Public providers use HTTPS. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors><certificates src="system" /></trust-anchors>
+    </base-config>
+</network-security-config>
