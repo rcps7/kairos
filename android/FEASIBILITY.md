@@ -6,7 +6,7 @@ Target: native **Kotlin / Jetpack Compose** app, **minSdk 29 (Android 10)**, ful
 Legend:
 - **Ported** — reimplemented in Kotlin with the same behaviour.
 - **Substituted** — same user-facing capability, using an Android-native equivalent (named).
-- **Excluded** — not possible on stock, non-rooted Android; reason given. *Exclusions are proposals and need the owner's approval before being final.*
+- **Excluded** — not possible on stock, non-rooted Android; reason given. *All five exclusions were approved by the owner on 2026-11-25.*
 
 ## Core agent
 
@@ -61,7 +61,7 @@ Legend:
 | Click / type / drag / keyboard / JS / mouse (`browser_click/action/js/mouse/design`) | Substituted | WebView JS + `MotionEvent` dispatch for coordinate clicks |
 | Screenshot + Vision assist (`browser_screenshot`) | Substituted | WebView bitmap capture → vision model |
 | CAPTCHA human-in-the-loop (`browser_captcha`) | Substituted | Agent pauses; user solves in the visible WebView; resume. **No automated solving.** |
-| Detect installed browsers / attach to running Chromium (`browser_detect/start`, CDP) | **Excluded (proposed)** | Android apps cannot remote-control other apps' browsers (no CDP on Chrome for Android without USB debugging from a PC). The built-in WebView replaces this. On the PC, it remains available through PC remote control |
+| Detect installed browsers / attach to running Chromium (`browser_detect/start`, CDP) | **Excluded (approved 2026-11-25)** | Android apps cannot remote-control other apps' browsers (no CDP on Chrome for Android without USB debugging from a PC). The built-in WebView replaces this. On the PC, it remains available through PC remote control |
 | Online design in EasyEDA | Substituted | Works in WebView. Desktop-class editors may be slow on phones |
 
 ## Communication
@@ -79,7 +79,7 @@ Legend:
 | Webhooks inbound (loopback `127.0.0.1:8765`) (`webhook.py`) | Substituted | Embedded NanoHTTPD on loopback while the service runs; outbound webhooks unchanged. Android also accepts share/intents as triggers |
 | Connectors: GitHub, Google, Notion (`connectors/*`) | Ported | REST calls |
 | MCP client to MCP servers (`mcp_client.py`) | Substituted | stdio subprocess servers can't run on Android. **Streamable-HTTP/SSE MCP servers** supported |
-| MCP server over stdio (`mcp_server.py`) | **Excluded (proposed)** | No stdio host can launch an Android app as a process. Equivalent access is given by the PC remote API |
+| MCP server over stdio (`mcp_server.py`) | **Excluded (approved 2026-11-25)** | No stdio host can launch an Android app as a process. Equivalent access is given by the PC remote API |
 
 ## Devices & system
 
@@ -90,10 +90,10 @@ Legend:
 | Spoken replies (pyttsx3) | Substituted | Android `TextToSpeech` |
 | Animated mood orb | Ported | Compose Canvas animation |
 | Skills: create / view / edit / run / delete (`skills/*`) | Substituted | Desktop skills are Python files run in a subprocess or Docker. On Android: skills are **JavaScript** run in a sandboxed QuickJS engine (`quickjs-kt`, MIT) with the same tool API. Existing Python skills can run on the PC via remote control |
-| Docker skill sandbox (`skills/docker_runner.py`) | **Excluded (proposed)** | No Docker on Android. QuickJS sandbox replaces it |
+| Docker skill sandbox (`skills/docker_runner.py`) | **Excluded (approved 2026-11-25)** | No Docker on Android. QuickJS sandbox replaces it |
 | File read/write/list confined to a root (`read_file` …) | Ported | App storage + user-picked folder via Storage Access Framework |
 | Shell command tool (`run_command`, off by default) | Substituted | Runs `/system/bin/sh` inside the app sandbox (very limited toolset), still off by default |
-| Computer-use task (`computer.py`, desktop mouse/keyboard) | **Excluded (proposed)** | Controlling other apps requires an AccessibilityService, which F-Droid and Play treat as high-risk and which cannot drive arbitrary apps reliably. Available on the PC through remote control |
+| Computer-use task (`computer.py`, desktop mouse/keyboard) | **Excluded (approved 2026-11-25)** | Controlling other apps requires an AccessibilityService, which F-Droid and Play treat as high-risk and which cannot drive arbitrary apps reliably. Available on the PC through remote control |
 | Git workflows (system `git`) (`git_tool.py`) | Substituted | **JGit** (EDL/BSD) — status/diff/log/commit/branch/checkout, opt-in push/pull with token |
 | Watchdog + kill switch + heartbeat (`watchdog.py`, `kill.bat`) | Substituted | Foreground-service heartbeat with **Kill** in the persistent notification and in-app; Telegram `/kill` kept. `.bat` scripts excluded (Windows-only) |
 | Keyring secret storage (Windows Credential Manager) | Substituted | Android Keystore-backed EncryptedSharedPreferences |
@@ -109,5 +109,5 @@ Legend:
 
 ## Summary
 
-- Most features are ported or substituted; 5 capabilities are proposed for exclusion — browser detect/attach to external browsers, stdio MCP server, Docker skill runner, computer-use of other apps, Windows launcher scripts. Each excluded capability remains reachable on the PC through the remote-control feature.
+- Most features are ported or substituted; 5 capabilities are excluded (owner-approved) — browser detect/attach to external browsers, stdio MCP server, Docker skill runner, computer-use of other apps, Windows launcher scripts. Each excluded capability remains reachable on the PC through the remote-control feature.
 - Dependencies needing explicit approval before use: youtubedl-android (bundles ffmpeg), yrs/Automerge for CRDT, Vosk offline speech model, ONNX Runtime for on-device embeddings.

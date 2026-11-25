@@ -86,7 +86,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun KairosRoot(vm: MainViewModel, app: KairosApp) {
     var tab by remember { mutableIntStateOf(0) }
-    val tabs = listOf("Chat", "Provider", "Characters", "Memory")
+    val tabs = listOf("Chat", "Provider", "Characters", "Memory", "Library")
     Scaffold(
         topBar = { TopAppBar(title = { Text("KAIROS") }) },
         bottomBar = {
@@ -103,7 +103,8 @@ fun KairosRoot(vm: MainViewModel, app: KairosApp) {
                 0 -> ChatScreen(vm)
                 1 -> ProviderScreen(vm, app)
                 2 -> CharacterScreen(app)
-                else -> MemoryScreen(app)
+                3 -> MemoryScreen(app)
+                else -> LibraryScreen(app)
             }
         }
     }
@@ -216,6 +217,46 @@ fun MemoryScreen(app: KairosApp) {
                 Row(Modifier.fillMaxWidth().padding(4.dp)) {
                     Text(m.content, Modifier.weight(1f))
                     TextButton(onClick = { app.store.forget(m.id); items = app.store.allMemories() }) { Text("Forget") }
+                }
+            }
+        }
+    }
+}
+
+
+/** Knowledge library (desktop: Library tab + "Learn from page"). */
+@Composable
+fun LibraryScreen(app: KairosApp) {
+    var docs by remember { mutableStateOf(app.store.allDocuments()) }
+    var url by remember { mutableStateOf("") }
+    var query by remember { mutableStateOf("") }
+    var status by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    Column(Modifier.fillMaxSize().padding(12.dp)) {
+        Row {
+            OutlinedTextField(url, { url = it }, Modifier.weight(1f).testTag("learn_url"), label = { Text("Learn from URL") }, singleLine = true)
+            Button(enabled = !busy && url.isNotBlank(), onClick = {
+                busy = true; status = "Learning…"
+                scope.launch {
+                    status = try { val r = app.webTools.learn(url.trim()); url = ""; "Saved: ${r.title}" }
+                    catch (e: Exception) { "Failed: ${e.message}" }
+                    docs = app.store.allDocuments(); busy = false
+                }
+            }) { Text("Learn") }
+        }
+        OutlinedTextField(query, { query = it; docs = if (it.isBlank()) app.store.allDocuments() else app.store.searchDocuments(it, 50) },
+            Modifier.fillMaxWidth(), label = { Text("Search library") }, singleLine = true)
+        if (status.isNotEmpty()) Text(status)
+        LazyColumn {
+            items(docs) { d ->
+                Card(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                    Column(Modifier.padding(10.dp)) {
+                        Text(d.title.ifBlank { d.url }, style = MaterialTheme.typography.titleSmall)
+                        Text(d.url, style = MaterialTheme.typography.bodySmall)
+                        Text(d.summary.take(600))
+                        TextButton(onClick = { app.store.deleteDocument(d.id); docs = app.store.allDocuments() }) { Text("Delete") }
+                    }
                 }
             }
         }

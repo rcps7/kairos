@@ -12,6 +12,10 @@ import org.kairos.agent.data.SecureStore
 import org.kairos.agent.data.Settings
 import org.kairos.agent.llm.ChatMessage
 import org.kairos.agent.llm.LlmClient
+import org.kairos.agent.agent.Library
+import org.kairos.agent.agent.WebTools
+import org.kairos.agent.web.WebScraper
+import org.kairos.agent.web.WebSearcher
 
 class KairosApp : Application() {
     lateinit var settings: Settings
@@ -20,6 +24,9 @@ class KairosApp : Application() {
     lateinit var characters: CharacterRegistry
     val llm = LlmClient()
     lateinit var engine: Engine
+    lateinit var webTools: WebTools
+    val searcher = WebSearcher()
+    val scraper = WebScraper()
 
     override fun onCreate() {
         super.onCreate()
@@ -40,6 +47,16 @@ class KairosApp : Application() {
             llm.chat(settings.apiUrl(pid), secrets.get(SecureStore.apiKeyName(pid)).orEmpty(),
                 settings.model(pid), messages, onDelta = onDelta).text
         }
-        engine = Engine(characters, mem, backend)
+        webTools = WebTools(
+            characters,
+            search = { q, n -> searcher.search(q, n) },
+            fetch = { u -> scraper.fetch(u) },
+            summarize = { prompt -> backend.complete(listOf(ChatMessage("user", prompt)), null) },
+            library = object : Library {
+                override fun add(url: String, title: String, html: String, text: String, summary: String) =
+                    store.addDocument(url, title, html, text, summary)
+            },
+        )
+        engine = Engine(characters, mem, backend, tools = webTools)
     }
 }

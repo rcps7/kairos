@@ -39,6 +39,21 @@ class DeviceTest {
         assertTrue(m.allMemories().isEmpty())
     }
 
+    @Test fun libraryAddSearchDelete() {
+        val m = MemoryStore(ctx, null)
+        val id = m.addDocument("https://a.example", "Resistor colour codes", "<p>x</p>", "Brown black red is 1k", "• 1k = brown black red")
+        assertEquals(1, m.searchDocuments("brown black").size)
+        assertEquals(0, m.searchDocuments("capacitor").size)
+        assertEquals("Resistor colour codes", m.allDocuments().single().title)
+        m.deleteDocument(id); assertTrue(m.allDocuments().isEmpty())
+    }
+
+    /** The Library tab is reachable from the bottom bar. */
+    @Test fun libraryTabOpens() {
+        compose.onNodeWithTag("tab_Library").performClick()
+        compose.onNodeWithTag("learn_url").assertIsDisplayed()
+    }
+
     /** End-to-end: the app chats with a configured (local, OpenAI-compatible) LLM provider. */
     @Test fun chatsWithConfiguredProvider() {
         val server = ServerSocket(0)

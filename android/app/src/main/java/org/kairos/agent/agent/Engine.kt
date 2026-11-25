@@ -22,6 +22,7 @@ class Engine(
     private val memory: AgentMemory,
     private val backend: ChatBackend,
     private val historyTurns: Int = 20,
+    private val tools: ToolRunner? = null,
 ) {
     /** Handles local slash commands; returns a reply, or null if the text should go to the LLM. */
     fun localCommand(text: String): String? {
@@ -36,6 +37,7 @@ class Engine(
                 if (hits.isEmpty()) "No matching memories." else hits.joinToString("\n") { "• $it" }
             }
             t == "/whoami" -> characters.active().let { "Active character: ${it.name}" }
+            t == "/help" -> "Commands: /remember <text>, /recall <query>, /search <query>, /learn <url>, /scrape <url>, /whoami"
             else -> null
         }
     }
@@ -43,6 +45,8 @@ class Engine(
     fun systemPrompt(userText: String): String {
         val c = characters.active()
         val sb = StringBuilder(c.system_prompt.ifBlank { "You are KAIROS, a helpful self-improving AI agent." })
+        if (tools != null) sb.append("\n\n").append(Tools.buildProtocol(c.capabilities))
+        sb.append("\n\n").append(Tools.GUARDRAIL_NOTE)
         if (characters.can("memory")) {
             val mem = memory.recall(userText, 6)
             if (mem.isNotEmpty()) {
@@ -58,14 +62,84 @@ class Engine(
             memory.history(historyTurns * 2) +
             ChatMessage("user", userText)
 
+    /** Slash commands that run a tool directly: /search, /learn, /scrape. */
+    private suspend fun toolCommand(text: String): String? {
+        val t = text.trim()
+        val tr = tools ?: return null
+        return when {
+            t.startsWith("/search ") -> tr.run(ToolCall("web_search", mapOf("query" to t.removePrefix("/search ").trim())))
+            t.startsWith("/learn ") -> tr.run(ToolCall("learn_web", mapOf("url" to t.removePrefix("/learn ").trim())))
+            t.startsWith("/scrape ") -> tr.run(ToolCall("scrape", mapOf("url" to t.removePrefix("/scrape ").trim())))
+            else -> null
+        }
+    }
+
     suspend fun chat(userText: String, onDelta: ((String) -> Unit)? = null): String {
-        localCommand(userText)?.let { reply ->
-            memory.append("user", userText); memory.append("assistant", reply); return reply
+        (localCommand(userText) ?: toolCommand(userText))?.let { reply ->
+            memory.append("user", userText); memory.append("assistant", reply); onDelta?.invoke(reply); return reply
         }
         val messages = buildMessages(userText)
         memory.append("user", userText)
-        val reply = backend.complete(messages, onDelta)
+        val reply = if (tools == null) backend.complete(messages, onDelta) else streamWithTools(messages, onDelta)
         memory.append("assistant", reply)
         return reply
+    }
+
+    /**
+     * Desktop stream_chat: stream prose, but if the model starts a tool request stop showing text,
+     * run the tool loop and emit the final answer instead, so raw tool markup never reaches the user.
+     */
+    private suspend fun streamWithTools(messages: List<ChatMessage>, onDelta: ((String) -> Unit)?): String {
+        val buf = StringBuilder()
+        var emitted = 0
+        var toolMode = false
+        val wrapped: ((String) -> Unit)? = onDelta?.let { out -> { piece: String ->
+            buf.append(piece)
+            if (!toolMode) {
+                val text = buf.toString()
+                val cut = Tools.firstMarker(text)
+                if (cut != null) {
+                    toolMode = true
+                    if (cut > emitted) { out(text.substring(emitted, cut)); emitted = cut }
+                } else {
+                    val safe = text.length - Tools.holdback(text)
+                    if (safe > emitted) { out(text.substring(emitted, safe)); emitted = safe }
+                }
+            }
+        } }
+        val full = backend.complete(messages, wrapped)
+        if (onDelta == null) { buf.setLength(0); buf.append(full) }
+        val text = buf.toString().ifEmpty { full }
+        val (clean, calls) = Tools.parse(text)
+        if (calls.isEmpty()) {
+            if (onDelta != null && text.length > emitted) onDelta(text.substring(emitted))
+            return if (toolMode) text else (clean.ifEmpty { text })
+        }
+        val prefix = text.substring(0, minOf(emitted, text.length))
+        val answer = toolLoop(messages, text, calls)
+        val sep = if (prefix.isNotBlank()) "\n\n" else ""
+        onDelta?.invoke(sep + answer)
+        return prefix + sep + answer
+    }
+
+    /** Desktop _tool_loop: run requested tools, feed results back, ask again (bounded rounds). */
+    suspend fun toolLoop(base: List<ChatMessage>, firstReply: String, firstCalls: List<ToolCall>): String {
+        val tr = tools ?: return Tools.parse(firstReply).first
+        var conv = base
+        var reply = firstReply
+        var calls = firstCalls
+        repeat(Tools.MAX_TOOL_ROUNDS) {
+            val results = calls.map { c -> c to Tools.wrapUntrusted(c.name, tr.run(c)) }
+            conv = conv + ChatMessage("assistant", reply) + ChatMessage("user",
+                Tools.formatResults(results) + "\n\nNow answer the user's original question using the tool " +
+                    "results above. Do not emit more tool tags unless essential.")
+            reply = backend.complete(conv, null)
+            val (clean, next) = Tools.parse(reply)
+            if (next.isEmpty()) return clean.ifEmpty { reply }
+            calls = next
+        }
+        return Tools.parse(reply).first.ifEmpty {
+            "I gathered some information but could not finish the answer. Please refine your request or try again."
+        }
     }
 }
