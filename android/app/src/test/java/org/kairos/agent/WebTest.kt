@@ -36,7 +36,7 @@ class WebTest {
         val r = WebSearcher(endpoint = s.url("/html/").toString()).search("kotlin docs")
         assertEquals(2, r.size)
         val req = s.takeRequest()
-        assertEquals("POST", req.method); assertTrue(req.body.readUtf8().contains("q=kotlin+docs"))
+        assertEquals("POST", req.method); val body = req.body.readUtf8(); assertTrue(body, body == "q=kotlin%20docs" || body == "q=kotlin+docs")
         s.shutdown()
     }
 
