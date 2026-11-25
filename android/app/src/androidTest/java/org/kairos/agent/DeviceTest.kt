@@ -91,7 +91,7 @@ class DeviceTest {
         } catch (e: Throwable) {
             val stored = app.store.recentMessages(10).joinToString(" | ") { "${it.role}: ${it.content.take(200)}" }
             val shown = compose.onAllNodes(hasText("", substring = true)).fetchSemanticsNodes()
-                .joinToString(" | ") { n -> n.config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.Text)?.joinToString() ?: "" }
+                .joinToString(" | ") { n -> n.config.getOrElseNullable(androidx.compose.ui.semantics.SemanticsProperties.Text) { null }?.joinToString() ?: "" }
             throw AssertionError("No reply. stored=[$stored] shown=[${shown.take(1500)}]", e)
         }
         server.close()
