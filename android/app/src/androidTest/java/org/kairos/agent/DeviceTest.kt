@@ -59,14 +59,19 @@ class DeviceTest {
         val server = ServerSocket(0)
         thread(isDaemon = true) {
             server.accept().use { sock ->
-                val inp = sock.getInputStream().bufferedReader()
-                var len = 0
-                while (true) {
-                    val l = inp.readLine() ?: break
-                    if (l.isEmpty()) break
-                    if (l.lowercase().startsWith("content-length:")) len = l.substringAfter(':').trim().toInt()
+                // Read headers and body as raw bytes: Content-Length counts bytes, and the
+                // system prompt can contain multi-byte UTF-8 characters.
+                val inp = sock.getInputStream()
+                val head = java.io.ByteArrayOutputStream()
+                while (!head.toString("ISO-8859-1").endsWith("\r\n\r\n")) {
+                    val b = inp.read(); if (b < 0) break; head.write(b)
                 }
-                repeat(len) { inp.read() }
+                val len = head.toString("ISO-8859-1").lines()
+                    .firstOrNull { it.lowercase().startsWith("content-length:") }
+                    ?.substringAfter(':')?.trim()?.toInt() ?: 0
+                var got = 0
+                val buf = ByteArray(8192)
+                while (got < len) { val n = inp.read(buf, 0, minOf(buf.size, len - got)); if (n < 0) break; got += n }
                 val body = """{"choices":[{"message":{"content":"KAIROS_PONG"}}]}"""
                 sock.getOutputStream().write(("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n" +
                     "Content-Length: ${body.length}\r\nConnection: close\r\n\r\n$body").toByteArray())
@@ -81,7 +86,14 @@ class DeviceTest {
 
         compose.onNodeWithTag("input").performTextInput("ping")
         compose.onNodeWithTag("send").performClick()
-        compose.waitUntil(15_000) { compose.onAllNodesWithText("KAIROS_PONG").fetchSemanticsNodes().isNotEmpty() }
+        try {
+            compose.waitUntil(30_000) { compose.onAllNodesWithText("KAIROS_PONG", substring = true).fetchSemanticsNodes().isNotEmpty() }
+        } catch (e: Throwable) {
+            val stored = app.store.recentMessages(10).joinToString(" | ") { "${it.role}: ${it.content.take(200)}" }
+            val shown = compose.onAllNodes(hasText("", substring = true)).fetchSemanticsNodes()
+                .joinToString(" | ") { n -> n.config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.Text)?.joinToString() ?: "" }
+            throw AssertionError("No reply. stored=[$stored] shown=[${shown.take(1500)}]", e)
+        }
         server.close()
     }
 }
