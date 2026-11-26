@@ -20,7 +20,8 @@ fun interface ChatBackend {
 const val ADVANCED_PROTOCOL = "ADVANCED TOOLS\nYou may also request these host tools with " +
     "<tool name=\"NAME\">{JSON arguments}</tool>:\n" +
     "  - plan_create(goal, steps)\n  - plan_add_step(plan_id, title)\n" +
-    "  - plan_update_step(step_id, status, result)\n  - plan_status(plan_id)"
+    "  - plan_update_step(step_id, status, result)\n  - plan_status(plan_id)\n" +
+    "  - read_email(limit)\n  - send_email(to, subject, body)"
 
 class Engine(
     private val characters: CharacterRegistry,

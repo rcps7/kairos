@@ -44,7 +44,10 @@ class MainViewModel(app: android.app.Application) : AndroidViewModel(app) {
     var busy by mutableStateOf(false); private set
     var status by mutableStateOf(""); private set
 
-    var mode by mutableStateOf("chat")
+    private var _mode by mutableStateOf(k.settings.agentMode)
+    var mode: String
+        get() = _mode
+        set(v) { _mode = v; k.settings.agentMode = v }
 
     /** Every turn goes through the FIFO job queue, so the user can keep typing while one runs. */
     fun send(text: String) {
@@ -97,7 +100,11 @@ fun KairosRoot(vm: MainViewModel, app: KairosApp) {
     var tab by remember { mutableIntStateOf(0) }
     val tabs = listOf("Chat", "Provider", "Characters", "Memory", "Library", "Plans")
     Scaffold(
-        topBar = { TopAppBar(title = { Text("KAIROS") }) },
+        topBar = {
+            TopAppBar(title = { Text("KAIROS") }, actions = {
+                TextButton(onClick = { tab = 6 }, modifier = Modifier.testTag("tab_Connect")) { Text("Email & Telegram") }
+            })
+        },
         bottomBar = {
             NavigationBar {
                 tabs.forEachIndexed { i, t ->
@@ -114,7 +121,8 @@ fun KairosRoot(vm: MainViewModel, app: KairosApp) {
                 2 -> CharacterScreen(app)
                 3 -> MemoryScreen(app)
                 4 -> LibraryScreen(app)
-                else -> PlansScreen(app)
+                5 -> PlansScreen(app)
+                else -> ConnectScreen(app)
             }
         }
     }
@@ -296,6 +304,119 @@ fun PlansScreen(app: KairosApp) {
                     p.steps.forEach { s -> Text("${s.idx + 1}. [${s.status}] ${s.title}") }
                     TextButton(onClick = { app.store.delete(p.id); plans = app.store.list(100) }) { Text("Delete") }
                 }
+            }
+        }
+    }
+}
+
+
+/** Email and Telegram setup plus an inbox (desktop: Edit -> Email / Telegram Settings, Mail panel). */
+@Composable
+fun ConnectScreen(app: KairosApp) {
+    val s = app.settings
+    val scope = rememberCoroutineScope()
+    var addr by remember { mutableStateOf(s.emailAddress) }
+    var pass by remember { mutableStateOf(app.secrets.get(SecureStore.EMAIL_PASSWORD).orEmpty()) }
+    var imap by remember { mutableStateOf(s.imapHost) }
+    var imapPort by remember { mutableStateOf(s.imapPort.toString()) }
+    var smtp by remember { mutableStateOf(s.smtpHost) }
+    var smtpPort by remember { mutableStateOf(s.smtpPort.toString()) }
+    var mailStatus by remember { mutableStateOf("") }
+    var inbox by remember { mutableStateOf<List<org.kairos.agent.email.MailItem>>(emptyList()) }
+    var to by remember { mutableStateOf("") }
+    var subject by remember { mutableStateOf("") }
+    var body by remember { mutableStateOf("") }
+
+    var token by remember { mutableStateOf(app.secrets.get(SecureStore.TELEGRAM_TOKEN).orEmpty()) }
+    var allowed by remember { mutableStateOf(s.telegramAllowed) }
+    var tgOn by remember { mutableStateOf(s.telegramEnabled) }
+    var tgStatus by remember { mutableStateOf(org.kairos.agent.telegram.TelegramService.status) }
+    LaunchedEffect(Unit) { while (true) { kotlinx.coroutines.delay(1000); tgStatus = org.kairos.agent.telegram.TelegramService.status } }
+
+    fun saveEmail() {
+        s.emailAddress = addr; s.imapHost = imap; s.smtpHost = smtp
+        s.imapPort = imapPort.toIntOrNull() ?: 993; s.smtpPort = smtpPort.toIntOrNull() ?: 465
+        app.secrets.put(SecureStore.EMAIL_PASSWORD, pass.ifEmpty { null })
+    }
+
+    LazyColumn(Modifier.fillMaxSize().padding(12.dp).testTag("connect")) {
+        item {
+            Text("Email (IMAP/SMTP over SSL)", style = MaterialTheme.typography.titleMedium)
+            OutlinedTextField(addr, { addr = it }, Modifier.fillMaxWidth(), label = { Text("Email address") }, singleLine = true)
+            OutlinedTextField(pass, { pass = it }, Modifier.fillMaxWidth(), label = { Text("Password / app password") },
+                singleLine = true, visualTransformation = PasswordVisualTransformation())
+            Row {
+                OutlinedTextField(imap, { imap = it }, Modifier.weight(2f), label = { Text("IMAP host") }, singleLine = true)
+                OutlinedTextField(imapPort, { imapPort = it }, Modifier.weight(1f), label = { Text("Port") }, singleLine = true)
+            }
+            Row {
+                OutlinedTextField(smtp, { smtp = it }, Modifier.weight(2f), label = { Text("SMTP host") }, singleLine = true)
+                OutlinedTextField(smtpPort, { smtpPort = it }, Modifier.weight(1f), label = { Text("Port") }, singleLine = true)
+            }
+            Row {
+                Button(onClick = { saveEmail(); mailStatus = "Saved." }, Modifier.testTag("email_save")) { Text("Save") }
+                Spacer(Modifier.width(8.dp))
+                Button(onClick = {
+                    saveEmail(); mailStatus = "Reading inbox…"
+                    scope.launch {
+                        mailStatus = try { inbox = app.email.readMail(10); "${inbox.size} message(s)." } catch (e: Exception) { "Email error: ${e.message}" }
+                    }
+                }) { Text("Read inbox") }
+            }
+            if (mailStatus.isNotEmpty()) Text(mailStatus, Modifier.testTag("mail_status"))
+        }
+        items(inbox) { m ->
+            Card(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                Column(Modifier.padding(10.dp)) {
+                    Text(m.subject.ifBlank { "(no subject)" }, style = MaterialTheme.typography.titleSmall)
+                    Text("${m.from} · ${m.date}", style = MaterialTheme.typography.bodySmall)
+                    Text(m.body.trim().take(400))
+                }
+            }
+        }
+        item {
+            Text("Compose", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 8.dp))
+            OutlinedTextField(to, { to = it }, Modifier.fillMaxWidth(), label = { Text("To") }, singleLine = true)
+            OutlinedTextField(subject, { subject = it }, Modifier.fillMaxWidth(), label = { Text("Subject") }, singleLine = true)
+            OutlinedTextField(body, { body = it }, Modifier.fillMaxWidth().heightIn(min = 100.dp), label = { Text("Message") })
+            Button(enabled = to.isNotBlank(), onClick = {
+                saveEmail(); mailStatus = "Sending…"
+                scope.launch {
+                    mailStatus = try { app.email.sendMail(to.trim(), subject, body); body = ""; "Email sent." } catch (e: Exception) { "Send error: ${e.message}" }
+                }
+            }) { Text("Send email") }
+        }
+        item {
+            HorizontalDivider(Modifier.padding(vertical = 12.dp))
+            Text("Telegram bot", style = MaterialTheme.typography.titleMedium)
+            OutlinedTextField(token, { token = it }, Modifier.fillMaxWidth().testTag("tg_token"), label = { Text("Bot token from @BotFather") },
+                singleLine = true, visualTransformation = PasswordVisualTransformation())
+            OutlinedTextField(allowed, { allowed = it }, Modifier.fillMaxWidth(), label = { Text("Allowed user IDs (comma-separated)") }, singleLine = true)
+            Text("Only these Telegram users can command KAIROS. Send /whoami to your bot to see your ID. An empty list blocks everyone.",
+                style = MaterialTheme.typography.bodySmall)
+            Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                Switch(checked = tgOn, onCheckedChange = { on ->
+                    app.secrets.put(SecureStore.TELEGRAM_TOKEN, token.trim().ifEmpty { null })
+                    s.telegramAllowed = allowed
+                    tgOn = on; s.telegramEnabled = on
+                    if (on) org.kairos.agent.telegram.TelegramService.start(app) else org.kairos.agent.telegram.TelegramService.stop(app)
+                }, modifier = Modifier.testTag("tg_switch"))
+                Spacer(Modifier.width(8.dp))
+                Text(if (tgOn) "Bot on" else "Bot off")
+            }
+            Text("Status: $tgStatus", Modifier.testTag("tg_status"))
+            if (token.isNotBlank() && !org.kairos.agent.telegram.validateTokenFormat(token))
+                Text("Token format looks wrong (expected '<digits>:<secret>').", color = Color(0xFFFF6060))
+        }
+        item {
+            HorizontalDivider(Modifier.padding(vertical = 12.dp))
+            Text("Kill switch", style = MaterialTheme.typography.titleMedium)
+            var confirm by remember { mutableStateOf(false) }
+            if (!confirm) OutlinedButton(onClick = { confirm = true }) { Text("Shut down KAIROS…") }
+            else Row {
+                Button(onClick = { app.emergencyKill() }, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFB00020))) { Text("YES - SHUT DOWN") }
+                Spacer(Modifier.width(8.dp))
+                TextButton(onClick = { confirm = false }) { Text("Cancel") }
             }
         }
     }

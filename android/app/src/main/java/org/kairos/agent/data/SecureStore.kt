@@ -54,5 +54,7 @@ class SecureStore(context: Context) {
         private const val ALIAS = "kairos_master_key"
         private const val TRANSFORM = "AES/GCM/NoPadding"
         fun apiKeyName(providerId: String) = "llm_api_key_$providerId"
+        const val EMAIL_PASSWORD = "email_password"
+        const val TELEGRAM_TOKEN = "telegram_token"
     }
 }

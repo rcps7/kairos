@@ -67,6 +67,25 @@ class DeviceTest {
         compose.onNodeWithTag("plans").assertIsDisplayed()
     }
 
+    /** Email & Telegram settings open, save, and a malformed bot token is refused by the service. */
+    @Test fun connectScreenSavesSettings() {
+        compose.onNodeWithTag("tab_Connect").performClick()
+        compose.onNodeWithTag("connect").assertIsDisplayed()
+        compose.onNodeWithTag("email_save").performClick()
+        compose.onNodeWithTag("mail_status").assertTextContains("Saved.")
+        compose.onNodeWithTag("connect").performScrollToNode(hasTestTag("tg_token"))
+        compose.onNodeWithTag("tg_token").performTextInput("not-a-token")
+        compose.onNodeWithTag("connect").performScrollToNode(hasTestTag("tg_switch"))
+        compose.onNodeWithTag("tg_switch").performClick()
+        compose.waitUntil(5000) {
+            org.kairos.agent.telegram.TelegramService.status.contains("format looks wrong")
+        }
+        compose.onNodeWithTag("tg_switch").performClick() // turn back off
+        val app = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext as KairosApp
+        assertFalse(app.settings.telegramEnabled)
+        app.secrets.put(SecureStore.TELEGRAM_TOKEN, null)
+    }
+
     /** The Library tab is reachable from the bottom bar. */
     @Test fun libraryTabOpens() {
         compose.onNodeWithTag("tab_Library").performClick()

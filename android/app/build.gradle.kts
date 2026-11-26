@@ -54,6 +54,10 @@ android {
     kotlinOptions { jvmTarget = "17" }
     buildFeatures { compose = true }
     testOptions { unitTests.isReturnDefaultValues = true }
+    packaging {
+        resources.excludes += setOf("META-INF/LICENSE.md", "META-INF/NOTICE.md")
+        resources.pickFirsts += setOf("META-INF/mailcap", "META-INF/mailcap.default", "META-INF/mimetypes.default", "META-INF/javamail.providers", "META-INF/javamail.default.providers", "META-INF/javamail.default.address.map")
+    }
 }
 
 dependencies {
@@ -68,12 +72,20 @@ dependencies {
     implementation("androidx.work:work-runtime-ktx:2.10.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("org.jsoup:jsoup:1.18.3") // MIT
+    // Jakarta Mail for Android: EPL-2.0 OR GPL-2.0-with-Classpath-exception
+    implementation("com.sun.mail:android-mail:1.6.7")
+    implementation("com.sun.mail:android-activation:1.6.7")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
+    // In-process IMAP/SMTP server for email tests (Apache-2.0); uses the app's javax.mail classes.
+    testImplementation("com.icegreen:greenmail:1.6.15") {
+        exclude(group = "com.sun.mail", module = "javax.mail")
+        exclude(group = "javax.activation")
+    }
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test:runner:1.6.2")
