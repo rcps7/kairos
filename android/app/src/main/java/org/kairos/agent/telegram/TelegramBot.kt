@@ -33,12 +33,13 @@ interface BotHost {
     suspend fun runSkill(name: String, args: Map<String, String>): String
     suspend fun generateSkill(name: String, description: String): String
     fun createSkill(name: String, code: String): String
+    suspend fun git(sub: String, rest: String): String
 }
 
 /** Commands handled on desktop that need a later Android feature (skills, media, git, …). */
 private val LATER = setOf("download", "expired", "reflect", "lessons", "ports",
     "open", "send", "read", "close", "predict", "graph", "graphstats", "graphdel", "graphrepair", "pending",
-    "usage", "tasks", "task", "deltask", "image", "git", "webhooks", "write", "draw", "artifacts", "design", "browser")
+    "usage", "tasks", "task", "deltask", "image", "webhooks", "write", "draw", "artifacts", "design", "browser")
 
 class TelegramBot(
     private val api: TelegramApi,
@@ -157,6 +158,12 @@ class TelegramBot(
                 api.sendMessage(chat, "Proposed skill '$name':\n\n${code.take(3500)}",
                     listOf("Approve" to "approve_skill", "Reject" to "reject_skill")); Unit
             }
+            "git" -> denied("git_ops")?.let { reply(it) } ?: run {
+                val sub = arg.substringBefore(' ').lowercase(); val rest = arg.substringAfter(' ', "").trim()
+                if (sub.isEmpty()) return reply("Usage: /git status|diff|log|branches|commit <msg>|branch <name>|checkout <name>|pull|push")
+                if (sub == "commit" && rest.isEmpty()) return reply("Usage: /git commit <message>")
+                reply(try { host.git(sub, rest) } catch (e: Exception) { "Git error: ${e.message}" })
+            }
             "kill" -> { api.sendMessage(chat, "KILL SWITCH: shut down Kairos immediately?", listOf("YES - SHUT DOWN" to "confirm_kill", "Cancel" to "cancel_kill")); Unit }
             in LATER -> reply("/$cmd is not available in the Android app yet.")
             else -> reply("Unknown command. Send /help for the list.")
@@ -223,6 +230,7 @@ class TelegramBot(
             "/skills - list skills",
             "/runs <name> [key=value ...] - run a skill",
             "/newskill <name> <description> - generate a skill (asks to approve)",
+            "/git status|diff|log|branches|commit <msg>|branch <name>|checkout <name>|pull|push - git workflows",
             "/kill - kill switch (asks to confirm)",
             "/whoami - show your Telegram user ID",
         ).joinToString("\n")

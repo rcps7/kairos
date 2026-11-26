@@ -56,5 +56,6 @@ class SecureStore(context: Context) {
         fun apiKeyName(providerId: String) = "llm_api_key_$providerId"
         const val EMAIL_PASSWORD = "email_password"
         const val TELEGRAM_TOKEN = "telegram_token"
+        const val GIT_TOKEN = "git_token"
     }
 }

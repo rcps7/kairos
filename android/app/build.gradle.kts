@@ -55,7 +55,7 @@ android {
     buildFeatures { compose = true }
     testOptions { unitTests.isReturnDefaultValues = true }
     packaging {
-        resources.excludes += setOf("META-INF/LICENSE.md", "META-INF/NOTICE.md")
+        resources.excludes += setOf("META-INF/LICENSE.md", "META-INF/NOTICE.md", "about.html", "plugin.properties")
         resources.pickFirsts += setOf("META-INF/mailcap", "META-INF/mailcap.default", "META-INF/mimetypes.default", "META-INF/javamail.providers", "META-INF/javamail.default.providers", "META-INF/javamail.default.address.map")
     }
 }
@@ -77,6 +77,8 @@ dependencies {
     implementation("com.sun.mail:android-activation:1.6.7")
     // Mozilla Rhino JavaScript engine for the skill sandbox: MPL-2.0, pure Java
     implementation("org.mozilla:rhino:1.7.15")
+    // JGit for git workflows: EDL-1.0 (BSD-3-Clause). 5.13 is the last line targeting Java 8 APIs.
+    implementation("org.eclipse.jgit:org.eclipse.jgit:5.13.3.202401111512-r")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 

@@ -69,7 +69,7 @@ class DeviceTest {
 
     /** Email & Telegram settings open, save, and a malformed bot token is refused by the service. */
     @Test fun connectScreenSavesSettings() {
-        compose.onNodeWithTag("tab_Connect").performClick()
+        compose.onNodeWithTag("more").performClick(); compose.onNodeWithTag("tab_Connect").performClick()
         compose.onNodeWithTag("connect").assertIsDisplayed()
         compose.onNodeWithTag("email_save").performClick()
         compose.onNodeWithTag("mail_status").assertTextContains("Saved.")
@@ -89,7 +89,7 @@ class DeviceTest {
     /** A JavaScript skill is saved and runs in the Rhino sandbox on the device. */
     @Test fun skillSavesAndRunsOnDevice() {
         val app = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext as KairosApp
-        compose.onNodeWithTag("tab_Skills").performClick()
+        compose.onNodeWithTag("more").performClick(); compose.onNodeWithTag("tab_Skills").performClick()
         compose.onNodeWithTag("skill_name").performTextInput("device_echo")
         compose.onNodeWithTag("skill_code").performTextInput(
             "// description: device test\nfunction run(k, a) { var s = 0; for (var i = 1; i <= 100; i++) s += i; return 'sum=' + s + ' ' + a.who; }")
@@ -103,6 +103,39 @@ class DeviceTest {
         compose.waitUntil(10000) { compose.onAllNodesWithTag("skill_output").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithTag("skill_output").assertTextContains("sum=5050", substring = true)
         app.skills.deleteSkill("device_echo")
+    }
+
+    /** JGit works on the device: init, commit and log through the Git screen and GitTool. */
+    @Test fun gitInitCommitLogOnDevice() {
+        val app = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext as KairosApp
+        val dir = java.io.File(app.git.root, "device_repo"); dir.deleteRecursively()
+        compose.onNodeWithTag("more").performClick(); compose.onNodeWithTag("tab_Git").performClick()
+        if (!app.settings.gitEnabled) compose.onNodeWithTag("git_enabled").performClick()
+        compose.onNodeWithTag("git_repo").performTextClearance()
+        compose.onNodeWithTag("git_repo").performTextInput("device_repo")
+        compose.onNodeWithTag("git_init").performClick()
+        compose.waitUntil(10000) { java.io.File(dir, ".git").isDirectory }
+        java.io.File(dir, "notes.txt").writeText("hello from android")
+        compose.onNodeWithTag("git").performScrollToNode(hasTestTag("git_message"))
+        compose.onNodeWithTag("git_message").performTextInput("first android commit")
+        compose.onNodeWithTag("git").performScrollToNode(hasTestTag("git_commit"))
+        compose.onNodeWithTag("git_commit").performClick()
+        compose.waitUntil(15000) { runCatching { app.git.log(5, "device_repo") }.getOrDefault("").contains("first android commit") }
+        assertTrue(app.git.status("device_repo").contains("clean working tree"))
+        app.settings.gitEnabled = false
+        dir.deleteRecursively()
+    }
+
+    /** The Speak toggle persists and the Talk button is present. */
+    @Test fun voiceControlsPresent() {
+        val app = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext as KairosApp
+        val before = app.settings.speakReplies
+        compose.onNodeWithTag("talk").assertIsDisplayed()
+        compose.onNodeWithTag("speak").performClick()
+        assertEquals(!before, app.settings.speakReplies)
+        compose.onNodeWithTag("speak").performClick()
+        assertEquals(before, app.settings.speakReplies)
+        assertEquals("Hello world. code: (code omitted)", org.kairos.agent.voice.VoiceText.forSpeech("**Hello** world. code: ```x=1```"))
     }
 
     /** The Library tab is reachable from the bottom bar. */

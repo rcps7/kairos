@@ -86,7 +86,7 @@ Legend:
 | Feature | Status | Android implementation / reason |
 |---|---|---|
 | Serial peripherals ESP32 / Arduino / RPi (`peripherals/serial_manager.py`, pyserial) | Substituted | **USB OTG** via `usb-serial-for-android` (MIT): CP210x, CH34x, FTDI, CDC-ACM. Bluetooth SPP serial added for wireless boards |
-| Voice-to-text (Talk) + live voice meter | Substituted | Android `SpeechRecognizer` (falls back to Vosk offline model for F-Droid devices without Google speech) + `AudioRecord` level meter |
+| Voice-to-text (Talk) + live voice meter | Substituted | Android `SpeechRecognizer` with a live level meter (from the recognizer's RMS callback) and partial results. Devices without a recognition service get a clear message; the Vosk offline fallback is pending owner approval |
 | Spoken replies (pyttsx3) | Substituted | Android `TextToSpeech` |
 | Animated mood orb | Ported | Compose Canvas animation |
 | Skills: create / view / edit / run / delete (`skills/*`) | Substituted | Desktop skills are Python files run in a subprocess or Docker. On Android: skills are **JavaScript** run in a sandboxed **Mozilla Rhino** engine (MPL-2.0, pure Java; chosen over QuickJS because it needs no native libraries and runs in JVM unit tests) with the same whitelisted `kairos` RPC API, no Java/file/network access, and a hard time limit. Existing Python skills can run on the PC via remote control |
@@ -94,7 +94,7 @@ Legend:
 | File read/write/list confined to a root (`read_file` …) | Ported | App storage + user-picked folder via Storage Access Framework |
 | Shell command tool (`run_command`, off by default) | Substituted | Runs `/system/bin/sh` inside the app sandbox (very limited toolset), still off by default |
 | Computer-use task (`computer.py`, desktop mouse/keyboard) | **Excluded (approved 2026-11-25)** | Controlling other apps requires an AccessibilityService, which F-Droid and Play treat as high-risk and which cannot drive arbitrary apps reliably. Available on the PC through remote control |
-| Git workflows (system `git`) (`git_tool.py`) | Substituted | **JGit** (EDL/BSD) — status/diff/log/commit/branch/checkout, opt-in push/pull with token |
+| Git workflows (system `git`) (`git_tool.py`) | Substituted | **JGit 5.13** (EDL-1.0/BSD) — status/diff/log/branches/remotes/init/commit/stash/branch/checkout, opt-in clone/pull (fast-forward only) and push (never forced) with an HTTPS token; repos confined to app storage |
 | Watchdog + kill switch + heartbeat (`watchdog.py`, `kill.bat`) | Substituted | Foreground-service heartbeat with **Kill** in the persistent notification and in-app; Telegram `/kill` kept. `.bat` scripts excluded (Windows-only) |
 | Keyring secret storage (Windows Credential Manager) | Substituted | Android Keystore-backed EncryptedSharedPreferences |
 | Self-updater + Ed25519 signed bundle (`updater.py`, `release_signing.py`) | Substituted | Checks GitHub Releases, verifies the APK signature, hands the APK to the system installer. Disabled in the F-Droid flavour (F-Droid updates the app) |

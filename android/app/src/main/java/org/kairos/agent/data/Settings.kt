@@ -60,6 +60,31 @@ class Settings(context: Context) {
         get() = p.getString("telegram_allowed", "")!!
         set(v) = p.edit().putString("telegram_allowed", v).apply()
 
+    // ---- Git (desktop config "git"; the token lives in SecureStore) ----
+    var gitEnabled: Boolean
+        get() = p.getBoolean("git_enabled", false)
+        set(v) = p.edit().putBoolean("git_enabled", v).apply()
+    var gitAllowPush: Boolean
+        get() = p.getBoolean("git_allow_push", false)
+        set(v) = p.edit().putBoolean("git_allow_push", v).apply()
+    var gitAllowPull: Boolean
+        get() = p.getBoolean("git_allow_pull", false)
+        set(v) = p.edit().putBoolean("git_allow_pull", v).apply()
+    var gitAuthorName: String
+        get() = p.getString("git_author_name", "")!!
+        set(v) = p.edit().putString("git_author_name", v.trim()).apply()
+    var gitAuthorEmail: String
+        get() = p.getString("git_author_email", "")!!
+        set(v) = p.edit().putString("git_author_email", v.trim()).apply()
+    var gitActiveRepo: String
+        get() = p.getString("git_active_repo", "")!!
+        set(v) = p.edit().putString("git_active_repo", v.trim()).apply()
+
+    // ---- Voice ----
+    var speakReplies: Boolean
+        get() = p.getBoolean("speak_replies", false)
+        set(v) = p.edit().putBoolean("speak_replies", v).apply()
+
     companion object {
         /** Desktop _allowed_ids: ints from a list; invalid entries are skipped; empty denies everyone. */
         fun parseAllowedIds(raw: String): Set<Long> =

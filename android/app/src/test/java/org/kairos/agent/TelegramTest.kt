@@ -57,6 +57,7 @@ class FakeHost(var allowed: Set<Long> = setOf(111L), var caps: Set<String>? = nu
         if (name in skillsMap) "ran $name $args" else throw IllegalStateException("Skill '$name' not found.")
     override suspend fun generateSkill(name: String, description: String) = "// name: $name\nfunction run(){return 1}"
     override fun createSkill(name: String, code: String): String { skillsMap[name] = "new"; return "$name.js" }
+    override suspend fun git(sub: String, rest: String) = "git:$sub:$rest"
 }
 
 class TelegramTest {
@@ -132,7 +133,9 @@ class TelegramTest {
         bot.handle(msg(111, "/newplan Build a robot")); val pid = texts().last().removePrefix("Plan created: ")
         bot.handle(msg(111, "/plan $pid")); assertEquals("Build a robot [open]", texts().last())
         bot.handle(msg(111, "/execute ship it")); assertEquals("[execute] ship it done", texts().last())
-        bot.handle(msg(111, "/git status")); assertTrue(texts().last().contains("not available in the Android app yet"))
+        bot.handle(msg(111, "/download x")); assertTrue(texts().last().contains("not available in the Android app yet"))
+        bot.handle(msg(111, "/git commit")); assertEquals("Usage: /git commit <message>", texts().last())
+        bot.handle(msg(111, "/git commit fix bug")); assertEquals("git:commit:fix bug", texts().last())
         bot.handle(msg(111, "hello without slash")); assertTrue(texts().last().contains("not available")) // ignored: no new message
     }
 

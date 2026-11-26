@@ -27,6 +27,9 @@ import org.kairos.agent.telegram.TelegramService
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.serialization.json.*
 import org.kairos.agent.agent.SkillTools
+import org.kairos.agent.agent.GitTools
+import org.kairos.agent.git.GitConfig
+import org.kairos.agent.git.GitTool
 import org.kairos.agent.skills.SkillHost
 import org.kairos.agent.skills.SkillManager
 import org.kairos.agent.skills.SkillSandbox
@@ -49,6 +52,11 @@ class KairosApp : Application() {
     lateinit var botHost: BotHost
     lateinit var skills: SkillManager
     lateinit var backend: ChatBackend
+    lateinit var git: GitTool
+    val speaker by lazy { org.kairos.agent.voice.Speaker(this) }
+
+    fun gitConfig() = GitConfig(settings.gitEnabled, settings.gitAllowPush, settings.gitAllowPull,
+        settings.gitAuthorName, settings.gitAuthorEmail, secrets.get(SecureStore.GIT_TOKEN), settings.gitActiveRepo)
 
     /** Desktop generate_skill: ask the LLM for skill code; fall back to the template on failure. */
     suspend fun generateSkill(name: String, description: String): String = try {
@@ -108,6 +116,8 @@ class KairosApp : Application() {
             override suspend fun recall(query: String, limit: Int): JsonElement { need("memory")
                 return JsonArray(store.recall(query, limit).map { JsonPrimitive(it.content) }) }
         }
+        org.kairos.agent.git.AndroidSystemReader.install(java.io.File(filesDir, "git-home"))
+        git = GitTool(java.io.File(filesDir, "repos")) { gitConfig() }
         skills = SkillManager(java.io.File(filesDir, "skills"), SkillSandbox(skillHost))
         webTools = WebTools(
             characters,
@@ -118,7 +128,7 @@ class KairosApp : Application() {
                 override fun add(url: String, title: String, html: String, text: String, summary: String) =
                     store.addDocument(url, title, html, text, summary)
             },
-            fallback = PlanTools(store, EmailTools(characters, EmailClient { emailConfig() }, SkillTools(characters, skills))),
+            fallback = PlanTools(store, EmailTools(characters, EmailClient { emailConfig() }, SkillTools(characters, skills, GitTools(characters, git)))),
         )
         email = EmailClient { emailConfig() }
         engine = Engine(characters, mem, backend, tools = webTools)
@@ -171,4 +181,19 @@ class AppBotHost(private val app: KairosApp) : BotHost {
     }
     override suspend fun generateSkill(name: String, description: String) = app.generateSkill(name, description)
     override fun createSkill(name: String, code: String) = app.skills.createSkill(name, code).name
+    override suspend fun git(sub: String, rest: String): String = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        val g = app.git
+        when (sub) {
+            "status" -> g.summary()
+            "diff" -> g.diff()
+            "log" -> g.log()
+            "branches" -> g.branches()
+            "commit" -> g.commit(rest, addAll = true)
+            "branch" -> g.createBranch(rest)
+            "checkout" -> g.checkout(rest)
+            "pull" -> g.pull()
+            "push" -> g.push()
+            else -> "Unknown subcommand '$sub'."
+        }
+    }
 }

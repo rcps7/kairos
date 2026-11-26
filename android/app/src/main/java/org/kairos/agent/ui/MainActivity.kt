@@ -59,7 +59,10 @@ class MainViewModel(app: android.app.Application) : AndroidViewModel(app) {
         busy = true
         k.jobs.submit(org.kairos.agent.jobs.Job(label = "chat",
             onProgress = { _, p -> main.post { status = p } },
-            onDone = { _, r -> main.post { messages[idx] = UiMsg("assistant", r as String); finish() } },
+            onDone = { _, r -> main.post {
+                messages[idx] = UiMsg("assistant", r as String); finish()
+                if (k.settings.speakReplies) k.speaker.speak(r)
+            } },
             onError = { _, e -> main.post { messages[idx] = UiMsg("error", e.message ?: e.toString()); finish() } },
         ) { _, progress ->
             k.agent.run(text, m, progress) { d ->
@@ -76,6 +79,9 @@ class MainViewModel(app: android.app.Application) : AndroidViewModel(app) {
     }
 
     fun clear() { k.store.clearMessages(); messages.clear() }
+
+    var speak by mutableStateOf(k.settings.speakReplies); private set
+    fun toggleSpeak() { speak = !speak; k.settings.speakReplies = speak; if (!speak) k.speaker.stop() }
 
     fun refreshModels(pid: String, onDone: (List<String>) -> Unit) = viewModelScope.launch {
         status = "Fetching models…"
@@ -101,9 +107,15 @@ fun KairosRoot(vm: MainViewModel, app: KairosApp) {
     val tabs = listOf("Chat", "Provider", "Characters", "Memory", "Library", "Plans")
     Scaffold(
         topBar = {
+            var more by remember { mutableStateOf(false) }
             TopAppBar(title = { Text("KAIROS") }, actions = {
-                TextButton(onClick = { tab = 7 }, modifier = Modifier.testTag("tab_Skills")) { Text("Skills") }
-                TextButton(onClick = { tab = 6 }, modifier = Modifier.testTag("tab_Connect")) { Text("Email & Telegram") }
+                TextButton(onClick = { more = true }, modifier = Modifier.testTag("more")) { Text("More ▾") }
+                DropdownMenu(expanded = more, onDismissRequest = { more = false }) {
+                    listOf(7 to "Skills", 6 to "Connect", 8 to "Git").forEach { (i, t) ->
+                        DropdownMenuItem(text = { Text(if (t == "Connect") "Email & Telegram" else t) },
+                            onClick = { tab = i; more = false }, modifier = Modifier.testTag("tab_$t"))
+                    }
+                }
             })
         },
         bottomBar = {
@@ -124,7 +136,8 @@ fun KairosRoot(vm: MainViewModel, app: KairosApp) {
                 4 -> LibraryScreen(app)
                 5 -> PlansScreen(app)
                 6 -> ConnectScreen(app)
-                else -> SkillsScreen(app)
+                7 -> SkillsScreen(app)
+                else -> GitScreen(app)
             }
         }
     }
@@ -134,6 +147,22 @@ fun KairosRoot(vm: MainViewModel, app: KairosApp) {
 @Composable
 fun ChatScreen(vm: MainViewModel) {
     var input by remember { mutableStateOf("") }
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    var listening by remember { mutableStateOf(false) }
+    var level by remember { mutableFloatStateOf(0f) }
+    var voiceMsg by remember { mutableStateOf("") }
+    val listener = remember {
+        org.kairos.agent.voice.Listener(ctx,
+            onLevel = { level = it },
+            onPartial = { input = it },
+            onResult = { input = it; listening = false; voiceMsg = "" },
+            onError = { voiceMsg = it; listening = false })
+    }
+    DisposableEffect(Unit) { onDispose { listener.stop() } }
+    val micPermission = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission()) { ok ->
+        if (ok) { listening = true; voiceMsg = "Listening…"; listener.start() } else voiceMsg = "Microphone permission is needed for Talk."
+    }
     val list = rememberLazyListState()
     LaunchedEffect(vm.messages.size) { if (vm.messages.isNotEmpty()) list.animateScrollToItem(vm.messages.size - 1) }
     Column(Modifier.fillMaxSize().padding(8.dp)) {
@@ -152,7 +181,12 @@ fun ChatScreen(vm: MainViewModel) {
         Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
             OutlinedTextField(input, { input = it }, Modifier.weight(1f).testTag("input"),
                 placeholder = { Text("Message Kairos (/help for commands)") })
-            Spacer(Modifier.width(6.dp))
+            Spacer(Modifier.width(4.dp))
+            OutlinedButton(onClick = {
+                if (listening) { listener.stop(); listening = false; voiceMsg = "" }
+                else micPermission.launch(android.Manifest.permission.RECORD_AUDIO)
+            }, contentPadding = PaddingValues(horizontal = 10.dp), modifier = Modifier.testTag("talk")) { Text(if (listening) "Stop" else "Talk") }
+            Spacer(Modifier.width(4.dp))
             Button(onClick = { vm.send(input); input = "" }, modifier = Modifier.testTag("send")) {
                 Text("Send")
             }
@@ -162,8 +196,12 @@ fun ChatScreen(vm: MainViewModel) {
                 FilterChip(selected = vm.mode == id, onClick = { vm.mode = id }, label = { Text(label) },
                     modifier = Modifier.padding(end = 6.dp).testTag("mode_$id"))
             }
+            FilterChip(selected = vm.speak, onClick = { vm.toggleSpeak() }, label = { Text("Speak") },
+                modifier = Modifier.padding(end = 6.dp).testTag("speak"))
             if (vm.busy) Text("working…", Modifier.testTag("busy"))
         }
+        if (listening) LinearProgressIndicator(progress = { level }, modifier = Modifier.fillMaxWidth().testTag("voice_meter"))
+        if (voiceMsg.isNotEmpty()) Text(voiceMsg, Modifier.testTag("voice_msg"))
         if (vm.status.isNotEmpty()) Text(vm.status)
     }
 }
@@ -501,5 +539,92 @@ fun SkillsScreen(app: KairosApp) {
 private fun SelectionContainerText(text: String) {
     androidx.compose.foundation.text.selection.SelectionContainer {
         Text(text, Modifier.padding(top = 8.dp).testTag("skill_output"))
+    }
+}
+
+
+/** Git workflows with JGit (desktop: Git panel / git_tool.py). Repos live in the app's private storage. */
+@Composable
+fun GitScreen(app: KairosApp) {
+    val s = app.settings
+    val scope = rememberCoroutineScope()
+    var enabled by remember { mutableStateOf(s.gitEnabled) }
+    var allowPull by remember { mutableStateOf(s.gitAllowPull) }
+    var allowPush by remember { mutableStateOf(s.gitAllowPush) }
+    var authorName by remember { mutableStateOf(s.gitAuthorName) }
+    var authorEmail by remember { mutableStateOf(s.gitAuthorEmail) }
+    var token by remember { mutableStateOf(app.secrets.get(SecureStore.GIT_TOKEN).orEmpty()) }
+    var repo by remember { mutableStateOf(s.gitActiveRepo) }
+    var cloneUrl by remember { mutableStateOf("") }
+    var message by remember { mutableStateOf("") }
+    var branch by remember { mutableStateOf("") }
+    var out by remember { mutableStateOf("") }
+    val repos = remember(out) { app.git.root.listFiles { f -> java.io.File(f, ".git").isDirectory }?.map { it.name }?.sorted().orEmpty() }
+
+    fun save() {
+        s.gitEnabled = enabled; s.gitAllowPull = allowPull; s.gitAllowPush = allowPush
+        s.gitAuthorName = authorName; s.gitAuthorEmail = authorEmail; s.gitActiveRepo = repo
+        app.secrets.put(SecureStore.GIT_TOKEN, token.trim().ifEmpty { null })
+    }
+    fun op(label: String, block: () -> String) {
+        save()
+        if (!app.characters.can("git_ops")) { out = "'${app.characters.active().name}' is not permitted to use git."; return }
+        out = "$label…"
+        scope.launch { out = try { kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { block() } } catch (e: Exception) { "Git error: ${e.message}" } }
+    }
+    @Composable fun Toggle(label: String, v: Boolean, tag: String, set: (Boolean) -> Unit) =
+        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+            Switch(checked = v, onCheckedChange = { set(it); save() }, modifier = Modifier.testTag(tag)); Spacer(Modifier.width(8.dp)); Text(label)
+        }
+
+    LazyColumn(Modifier.fillMaxSize().padding(12.dp).testTag("git")) {
+        item {
+            Toggle("Git enabled", enabled, "git_enabled") { enabled = it }
+            Toggle("Allow pull / clone", allowPull, "git_pull_ok") { allowPull = it }
+            Toggle("Allow push (never forced)", allowPush, "git_push_ok") { allowPush = it }
+            Row {
+                OutlinedTextField(authorName, { authorName = it }, Modifier.weight(1f), label = { Text("Author name") }, singleLine = true)
+                OutlinedTextField(authorEmail, { authorEmail = it }, Modifier.weight(1f), label = { Text("Author email") }, singleLine = true)
+            }
+            OutlinedTextField(token, { token = it }, Modifier.fillMaxWidth(), label = { Text("HTTPS token (for private repos / push)") },
+                singleLine = true, visualTransformation = PasswordVisualTransformation())
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
+            OutlinedTextField(repo, { repo = it.trim() }, Modifier.fillMaxWidth().testTag("git_repo"), label = { Text("Repository folder") }, singleLine = true)
+            if (repos.isNotEmpty()) Row { repos.take(4).forEach { r -> AssistChip(onClick = { repo = r; save() }, label = { Text(r) }, modifier = Modifier.padding(end = 4.dp)) } }
+            Row {
+                OutlinedButton(enabled = repo.isNotBlank(), onClick = { op("Initializing") { app.git.init(repo) } }, modifier = Modifier.testTag("git_init")) { Text("Init") }
+                Spacer(Modifier.width(6.dp))
+                OutlinedButton(onClick = { op("Status") { app.git.summary(repo) } }, modifier = Modifier.testTag("git_status")) { Text("Status") }
+                Spacer(Modifier.width(6.dp))
+                OutlinedButton(onClick = { op("Log") { app.git.log(20, repo) } }, modifier = Modifier.testTag("git_log")) { Text("Log") }
+            }
+            Row {
+                OutlinedButton(onClick = { op("Diff") { app.git.diff(false, null, repo) } }) { Text("Diff") }
+                Spacer(Modifier.width(6.dp))
+                OutlinedButton(onClick = { op("Branches") { app.git.branches(repo) } }) { Text("Branches") }
+                Spacer(Modifier.width(6.dp))
+                OutlinedButton(onClick = { op("Remotes") { app.git.remotes(repo) } }) { Text("Remotes") }
+            }
+            OutlinedTextField(cloneUrl, { cloneUrl = it }, Modifier.fillMaxWidth(), label = { Text("Clone https:// URL") }, singleLine = true)
+            OutlinedButton(enabled = cloneUrl.isNotBlank() && repo.isNotBlank(), onClick = { op("Cloning") { app.git.clone(cloneUrl.trim(), repo) } }) { Text("Clone into folder") }
+            OutlinedTextField(message, { message = it }, Modifier.fillMaxWidth().testTag("git_message"), label = { Text("Commit message") })
+            Button(enabled = message.isNotBlank(), onClick = { op("Committing") { app.git.commit(message, addAll = true, repo = repo).also { message = "" } } },
+                modifier = Modifier.testTag("git_commit")) { Text("Stage all & commit") }
+            OutlinedTextField(branch, { branch = it }, Modifier.fillMaxWidth(), label = { Text("Branch") }, singleLine = true)
+            Row {
+                OutlinedButton(enabled = branch.isNotBlank(), onClick = { op("Creating branch") { app.git.createBranch(branch, true, repo) } }) { Text("New branch") }
+                Spacer(Modifier.width(6.dp))
+                OutlinedButton(enabled = branch.isNotBlank(), onClick = { op("Checking out") { app.git.checkout(branch, repo) } }) { Text("Checkout") }
+            }
+            Row {
+                OutlinedButton(onClick = { op("Pulling") { app.git.pull(repo) } }) { Text("Pull (ff-only)") }
+                Spacer(Modifier.width(6.dp))
+                OutlinedButton(onClick = { op("Pushing") { app.git.push("origin", null, repo) } }) { Text("Push") }
+            }
+            if (out.isNotEmpty()) androidx.compose.foundation.text.selection.SelectionContainer {
+                Text(out, Modifier.padding(top = 8.dp).testTag("git_out"),
+                    style = LocalTextStyle.current.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace))
+            }
+        }
     }
 }
