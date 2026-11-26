@@ -25,6 +25,11 @@ import org.kairos.agent.llm.Providers
 import org.kairos.agent.telegram.BotHost
 import org.kairos.agent.telegram.TelegramService
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.serialization.json.*
+import org.kairos.agent.agent.SkillTools
+import org.kairos.agent.skills.SkillHost
+import org.kairos.agent.skills.SkillManager
+import org.kairos.agent.skills.SkillSandbox
 import org.kairos.agent.web.WebScraper
 import org.kairos.agent.web.WebSearcher
 
@@ -42,6 +47,16 @@ class KairosApp : Application() {
     lateinit var agent: Agent
     lateinit var email: EmailClient
     lateinit var botHost: BotHost
+    lateinit var skills: SkillManager
+    lateinit var backend: ChatBackend
+
+    /** Desktop generate_skill: ask the LLM for skill code; fall back to the template on failure. */
+    suspend fun generateSkill(name: String, description: String): String = try {
+        val code = SkillManager.stripCodeFences(backend.complete(listOf(
+            ChatMessage("system", "You are an expert JavaScript developer writing skills for the KAIROS AI agent. Return ONLY code."),
+            ChatMessage("user", SkillManager.generationPrompt(name, description))), null))
+        if (SkillManager.looksValid(code)) code else SkillManager.template(name, description)
+    } catch (e: Exception) { SkillManager.template(name, description) }
 
     fun emailConfig() = EmailConfig(settings.emailAddress, secrets.get(SecureStore.EMAIL_PASSWORD).orEmpty(),
         settings.imapHost, settings.imapPort, settings.smtpHost, settings.smtpPort)
@@ -75,11 +90,25 @@ class KairosApp : Application() {
             override fun remember(content: String) = store.remember(content)
             override fun recall(query: String, limit: Int) = store.recall(query, limit).map { it.content }
         }
-        val backend = ChatBackend { messages, onDelta ->
+        backend = ChatBackend { messages, onDelta ->
             val pid = settings.activeProvider
             llm.chat(settings.apiUrl(pid), secrets.get(SecureStore.apiKeyName(pid)).orEmpty(),
                 settings.model(pid), messages, onDelta = onDelta).text
         }
+        val skillHost = object : SkillHost {
+            private fun need(cap: String) { if (!characters.can(cap)) throw SecurityException("not permitted: $cap") }
+            override suspend fun askLlm(prompt: String) = backend.complete(listOf(ChatMessage("user", prompt)), null)
+            override suspend fun searchWeb(query: String, maxResults: Int): JsonElement { need("web_search")
+                return JsonArray(searcher.search(query, maxResults).map { buildJsonObject { put("title", it.title); put("url", it.url); put("description", it.description) } }) }
+            override suspend fun scrapePage(url: String): JsonElement { need("learn_web")
+                val p = scraper.fetch(url); return buildJsonObject { put("title", p.title); put("text", p.text.take(20000)) } }
+            override suspend fun learnFromPage(url: String): JsonElement { need("learn_web")
+                val l = webTools.learn(url); return buildJsonObject { put("title", l.title); put("summary", l.summary) } }
+            override suspend fun addMemory(content: String): Boolean { need("memory"); return store.remember(content) }
+            override suspend fun recall(query: String, limit: Int): JsonElement { need("memory")
+                return JsonArray(store.recall(query, limit).map { JsonPrimitive(it.content) }) }
+        }
+        skills = SkillManager(java.io.File(filesDir, "skills"), SkillSandbox(skillHost))
         webTools = WebTools(
             characters,
             search = { q, n -> searcher.search(q, n) },
@@ -89,7 +118,7 @@ class KairosApp : Application() {
                 override fun add(url: String, title: String, html: String, text: String, summary: String) =
                     store.addDocument(url, title, html, text, summary)
             },
-            fallback = PlanTools(store, EmailTools(characters, EmailClient { emailConfig() })),
+            fallback = PlanTools(store, EmailTools(characters, EmailClient { emailConfig() }, SkillTools(characters, skills))),
         )
         email = EmailClient { emailConfig() }
         engine = Engine(characters, mem, backend, tools = webTools)
@@ -135,4 +164,11 @@ class AppBotHost(private val app: KairosApp) : BotHost {
     }
     override suspend fun runAgent(goal: String, mode: String) = app.queued("telegram-agent") { app.agent.run(goal, mode).text }
     override fun kill() = app.emergencyKill()
+    override fun skills() = app.skills.listSkills().filter { app.characters.allowsSkill(it.name) }.map { it.name to it.description }
+    override suspend fun runSkill(name: String, args: Map<String, String>): String {
+        if (!app.characters.allowsSkill(name)) throw SecurityException("Skill '$name' is not allowed for the active character.")
+        return app.skills.runSkill(name, args)
+    }
+    override suspend fun generateSkill(name: String, description: String) = app.generateSkill(name, description)
+    override fun createSkill(name: String, code: String) = app.skills.createSkill(name, code).name
 }

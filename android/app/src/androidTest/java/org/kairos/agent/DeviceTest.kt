@@ -86,6 +86,25 @@ class DeviceTest {
         app.secrets.put(SecureStore.TELEGRAM_TOKEN, null)
     }
 
+    /** A JavaScript skill is saved and runs in the Rhino sandbox on the device. */
+    @Test fun skillSavesAndRunsOnDevice() {
+        val app = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext as KairosApp
+        compose.onNodeWithTag("tab_Skills").performClick()
+        compose.onNodeWithTag("skill_name").performTextInput("device_echo")
+        compose.onNodeWithTag("skill_code").performTextInput(
+            "// description: device test\nfunction run(k, a) { var s = 0; for (var i = 1; i <= 100; i++) s += i; return 'sum=' + s + ' ' + a.who; }")
+        compose.onNodeWithTag("skills").performScrollToNode(hasTestTag("skill_save"))
+        compose.onNodeWithTag("skill_save").performClick()
+        assertTrue(app.skills.listSkills().any { it.name == "device_echo" && it.description == "device test" })
+        val out = kotlinx.coroutines.runBlocking { app.skills.runSkill("device_echo", mapOf("who" to "android")) }
+        assertEquals("sum=5050 android", out)
+        compose.onNodeWithTag("skills").performScrollToNode(hasTestTag("skill_run"))
+        compose.onNodeWithTag("skill_run").performClick()
+        compose.waitUntil(10000) { compose.onAllNodesWithTag("skill_output").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithTag("skill_output").assertTextContains("sum=5050", substring = true)
+        app.skills.deleteSkill("device_echo")
+    }
+
     /** The Library tab is reachable from the bottom bar. */
     @Test fun libraryTabOpens() {
         compose.onNodeWithTag("tab_Library").performClick()

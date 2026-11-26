@@ -89,8 +89,8 @@ Legend:
 | Voice-to-text (Talk) + live voice meter | Substituted | Android `SpeechRecognizer` (falls back to Vosk offline model for F-Droid devices without Google speech) + `AudioRecord` level meter |
 | Spoken replies (pyttsx3) | Substituted | Android `TextToSpeech` |
 | Animated mood orb | Ported | Compose Canvas animation |
-| Skills: create / view / edit / run / delete (`skills/*`) | Substituted | Desktop skills are Python files run in a subprocess or Docker. On Android: skills are **JavaScript** run in a sandboxed QuickJS engine (`quickjs-kt`, MIT) with the same tool API. Existing Python skills can run on the PC via remote control |
-| Docker skill sandbox (`skills/docker_runner.py`) | **Excluded (approved 2026-11-25)** | No Docker on Android. QuickJS sandbox replaces it |
+| Skills: create / view / edit / run / delete (`skills/*`) | Substituted | Desktop skills are Python files run in a subprocess or Docker. On Android: skills are **JavaScript** run in a sandboxed **Mozilla Rhino** engine (MPL-2.0, pure Java; chosen over QuickJS because it needs no native libraries and runs in JVM unit tests) with the same whitelisted `kairos` RPC API, no Java/file/network access, and a hard time limit. Existing Python skills can run on the PC via remote control |
+| Docker skill sandbox (`skills/docker_runner.py`) | **Excluded (approved 2026-11-25)** | No Docker on Android. The Rhino JavaScript sandbox replaces it |
 | File read/write/list confined to a root (`read_file` …) | Ported | App storage + user-picked folder via Storage Access Framework |
 | Shell command tool (`run_command`, off by default) | Substituted | Runs `/system/bin/sh` inside the app sandbox (very limited toolset), still off by default |
 | Computer-use task (`computer.py`, desktop mouse/keyboard) | **Excluded (approved 2026-11-25)** | Controlling other apps requires an AccessibilityService, which F-Droid and Play treat as high-risk and which cannot drive arbitrary apps reliably. Available on the PC through remote control |

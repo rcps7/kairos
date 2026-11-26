@@ -102,6 +102,7 @@ fun KairosRoot(vm: MainViewModel, app: KairosApp) {
     Scaffold(
         topBar = {
             TopAppBar(title = { Text("KAIROS") }, actions = {
+                TextButton(onClick = { tab = 7 }, modifier = Modifier.testTag("tab_Skills")) { Text("Skills") }
                 TextButton(onClick = { tab = 6 }, modifier = Modifier.testTag("tab_Connect")) { Text("Email & Telegram") }
             })
         },
@@ -122,7 +123,8 @@ fun KairosRoot(vm: MainViewModel, app: KairosApp) {
                 3 -> MemoryScreen(app)
                 4 -> LibraryScreen(app)
                 5 -> PlansScreen(app)
-                else -> ConnectScreen(app)
+                6 -> ConnectScreen(app)
+                else -> SkillsScreen(app)
             }
         }
     }
@@ -419,5 +421,85 @@ fun ConnectScreen(app: KairosApp) {
                 TextButton(onClick = { confirm = false }) { Text("Cancel") }
             }
         }
+    }
+}
+
+
+/** Skills: list, create (template or LLM-generated), edit, run and delete (desktop Skills panel). */
+@Composable
+fun SkillsScreen(app: KairosApp) {
+    val scope = rememberCoroutineScope()
+    var list by remember { mutableStateOf(app.skills.listSkills()) }
+    var name by remember { mutableStateOf("") }
+    var desc by remember { mutableStateOf("") }
+    var code by remember { mutableStateOf("") }
+    var args by remember { mutableStateOf("") }
+    var status by remember { mutableStateOf("") }
+    var output by remember { mutableStateOf("") }
+    fun refresh() { list = app.skills.listSkills() }
+    fun parseArgs() = args.split(Regex("\\s+")).filter { '=' in it }.associate { it.substringBefore('=') to it.substringAfter('=') }
+
+    LazyColumn(Modifier.fillMaxSize().padding(12.dp).testTag("skills")) {
+        item {
+            Text("Skills run as JavaScript in a sandbox with no file, network or Java access; they reach KAIROS only through the `kairos` object.",
+                style = MaterialTheme.typography.bodySmall)
+        }
+        items(list) { sk ->
+            Card(onClick = { name = sk.name; desc = sk.description; code = app.skills.readSource(sk.name); status = "Loaded ${sk.name}." },
+                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).testTag("skill_${sk.name}")) {
+                Column(Modifier.padding(10.dp)) {
+                    Text(sk.name, style = MaterialTheme.typography.titleSmall)
+                    if (sk.description.isNotBlank()) Text(sk.description, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        }
+        item {
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
+            OutlinedTextField(name, { name = it.lowercase() }, Modifier.fillMaxWidth().testTag("skill_name"), label = { Text("Name (a-z, 0-9, _)") }, singleLine = true)
+            OutlinedTextField(desc, { desc = it }, Modifier.fillMaxWidth(), label = { Text("Description") })
+            Row {
+                OutlinedButton(onClick = { code = org.kairos.agent.skills.SkillManager.template(name, desc) }) { Text("Template") }
+                Spacer(Modifier.width(8.dp))
+                OutlinedButton(enabled = name.isNotBlank() && desc.isNotBlank(), onClick = {
+                    if (!app.characters.can("skills_manage")) { status = "Not permitted: skills manage."; return@OutlinedButton }
+                    status = "Generating…"
+                    scope.launch { code = app.generateSkill(name, desc); status = "Review the code, then Save." }
+                }) { Text("Generate with AI") }
+            }
+            OutlinedTextField(code, { code = it }, Modifier.fillMaxWidth().heightIn(min = 160.dp).testTag("skill_code"),
+                label = { Text("Code") }, textStyle = LocalTextStyle.current.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace))
+            Row {
+                Button(enabled = name.isNotBlank() && code.isNotBlank(), onClick = {
+                    status = if (!app.characters.can("skills_manage")) "Not permitted: skills manage." else
+                        try { app.skills.saveSource(name, code); refresh(); "Saved $name." } catch (e: Exception) { "Save failed: ${e.message}" }
+                }, modifier = Modifier.testTag("skill_save")) { Text("Save") }
+                Spacer(Modifier.width(8.dp))
+                OutlinedButton(enabled = name.isNotBlank(), onClick = {
+                    status = if (!app.characters.can("skills_manage")) "Not permitted: skills manage." else
+                        try { if (app.skills.deleteSkill(name)) { refresh(); code = ""; "Deleted $name." } else "Not found." } catch (e: Exception) { "Delete failed: ${e.message}" }
+                }) { Text("Delete") }
+            }
+            OutlinedTextField(args, { args = it }, Modifier.fillMaxWidth(), label = { Text("Arguments: key=value key2=value2") }, singleLine = true)
+            Button(enabled = name.isNotBlank(), onClick = {
+                when {
+                    !app.characters.can("skills_run") -> status = "Not permitted: skills run."
+                    !app.characters.allowsSkill(name) -> status = "This character may not run '$name'."
+                    else -> { status = "Running…"; output = ""
+                        scope.launch {
+                            try { output = app.queued("skill") { app.skills.runSkill(name, parseArgs()) }; status = "Done." }
+                            catch (e: Exception) { status = "Skill error: ${e.message}" }
+                        } }
+                }
+            }, modifier = Modifier.testTag("skill_run")) { Text("Run") }
+            if (status.isNotEmpty()) Text(status, Modifier.testTag("skill_status"))
+            if (output.isNotEmpty()) SelectionContainerText(output)
+        }
+    }
+}
+
+@Composable
+private fun SelectionContainerText(text: String) {
+    androidx.compose.foundation.text.selection.SelectionContainer {
+        Text(text, Modifier.padding(top = 8.dp).testTag("skill_output"))
     }
 }

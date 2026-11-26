@@ -75,6 +75,8 @@ dependencies {
     // Jakarta Mail for Android: EPL-2.0 OR GPL-2.0-with-Classpath-exception
     implementation("com.sun.mail:android-mail:1.6.7")
     implementation("com.sun.mail:android-activation:1.6.7")
+    // Mozilla Rhino JavaScript engine for the skill sandbox: MPL-2.0, pure Java
+    implementation("org.mozilla:rhino:1.7.15")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 

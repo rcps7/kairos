@@ -51,6 +51,12 @@ class FakeHost(var allowed: Set<Long> = setOf(111L), var caps: Set<String>? = nu
     override fun setMode(mode: String) = (mode.takeIf { it in setOf("chat", "plan", "execute") } ?: "chat").also { this.mode = it }
     override suspend fun runAgent(goal: String, mode: String) = "[$mode] $goal done"
     override fun kill() { killed = true }
+    val skillsMap = mutableMapOf("hello" to "says hi")
+    override fun skills() = skillsMap.toList()
+    override suspend fun runSkill(name: String, args: Map<String, String>) =
+        if (name in skillsMap) "ran $name $args" else throw IllegalStateException("Skill '$name' not found.")
+    override suspend fun generateSkill(name: String, description: String) = "// name: $name\nfunction run(){return 1}"
+    override fun createSkill(name: String, code: String): String { skillsMap[name] = "new"; return "$name.js" }
 }
 
 class TelegramTest {
@@ -128,6 +134,22 @@ class TelegramTest {
         bot.handle(msg(111, "/execute ship it")); assertEquals("[execute] ship it done", texts().last())
         bot.handle(msg(111, "/git status")); assertTrue(texts().last().contains("not available in the Android app yet"))
         bot.handle(msg(111, "hello without slash")); assertTrue(texts().last().contains("not available")) // ignored: no new message
+    }
+
+    @Test fun skillCommandsWithApproval() = runTest {
+        val h = FakeHost(); val bot = TelegramBot(api(), h)
+        bot.handle(msg(111, "/skills")); assertEquals("Skills:\n- hello: says hi", texts().last())
+        bot.handle(msg(111, "/runs hello a=1 b=2")); assertEquals("Result:\nran hello {a=1, b=2}", texts().last())
+        bot.handle(msg(111, "/runs ghost")); assertTrue(texts().last().startsWith("Skill error"))
+        bot.handle(msg(111, "/newskill Bad/Name x")); assertTrue(texts().last().startsWith("Invalid name"))
+        bot.handle(msg(111, "/newskill weather get the weather"))
+        assertTrue(texts().last().startsWith("Proposed skill 'weather'"))
+        assertFalse("weather" in h.skillsMap) // nothing saved before approval
+        bot.handle(TgUpdate(9, 111, 111, null, 10, "cb", "approve_skill"))
+        assertEquals("Skill 'weather' created.", texts("editMessageText").last())
+        assertTrue("weather" in h.skillsMap)
+        bot.handle(TgUpdate(10, 111, 111, null, 10, "cb", "approve_skill"))
+        assertEquals("No pending skill.", texts("editMessageText").last())
     }
 
     @Test fun capabilityDenied() = runTest {

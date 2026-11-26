@@ -29,10 +29,14 @@ interface BotHost {
     fun setMode(mode: String): String
     suspend fun runAgent(goal: String, mode: String): String
     fun kill()
+    fun skills(): List<Pair<String, String>> // name, description
+    suspend fun runSkill(name: String, args: Map<String, String>): String
+    suspend fun generateSkill(name: String, description: String): String
+    fun createSkill(name: String, code: String): String
 }
 
 /** Commands handled on desktop that need a later Android feature (skills, media, git, …). */
-private val LATER = setOf("download", "skills", "runs", "newskill", "expired", "reflect", "lessons", "ports",
+private val LATER = setOf("download", "expired", "reflect", "lessons", "ports",
     "open", "send", "read", "close", "predict", "graph", "graphstats", "graphdel", "graphrepair", "pending",
     "usage", "tasks", "task", "deltask", "image", "git", "webhooks", "write", "draw", "artifacts", "design", "browser")
 
@@ -44,6 +48,7 @@ class TelegramBot(
     @Volatile var lastError: String? = null; private set
     @Volatile var running = false; private set
     private var offset = 0L
+    private val pendingSkill = java.util.concurrent.ConcurrentHashMap<Long, Pair<String, String>>()
 
     fun authorized(userId: Long?): Boolean = userId != null && userId in host.allowedUserIds()
 
@@ -134,6 +139,24 @@ class TelegramBot(
             }
             "planagent" -> if (arg.isEmpty()) reply("Usage: /planagent <goal>") else
                 reply(runCatching { host.runAgent(arg, "plan") }.getOrElse { "Error: ${it.message}" }.ifEmpty { "(no output)" })
+            "skills" -> host.skills().let { k ->
+                reply(if (k.isEmpty()) "No skills installed." else (listOf("Skills:") + k.map { (n, d) -> "- $n: $d" }).joinToString("\n"))
+            }
+            "runs" -> denied("skills_run")?.let { reply(it) } ?: if (arg.isEmpty()) reply("Usage: /runs <skill_name> [key=value ...]") else {
+                val parts = arg.split(Regex("\\s+"))
+                val args = parts.drop(1).filter { '=' in it }.associate { it.substringBefore('=') to it.substringAfter('=') }
+                reply(try { "Result:\n" + host.runSkill(parts[0], args) } catch (e: Exception) { "Skill error: ${e.message}" })
+            }
+            "newskill" -> denied("skills_manage")?.let { reply(it) } ?: run {
+                val name = arg.substringBefore(' ').trim().lowercase(); val desc = arg.substringAfter(' ', "").trim()
+                if (name.isEmpty() || desc.isEmpty()) return reply("Usage: /newskill <name> <description>")
+                if (!org.kairos.agent.skills.safeId(name)) return reply("Invalid name: use lowercase letters, digits and _ only.")
+                reply("Generating skill '$name' ...")
+                val code = host.generateSkill(name, desc)
+                pendingSkill[chat] = name to code
+                api.sendMessage(chat, "Proposed skill '$name':\n\n${code.take(3500)}",
+                    listOf("Approve" to "approve_skill", "Reject" to "reject_skill")); Unit
+            }
             "kill" -> { api.sendMessage(chat, "KILL SWITCH: shut down Kairos immediately?", listOf("YES - SHUT DOWN" to "confirm_kill", "Cancel" to "cancel_kill")); Unit }
             in LATER -> reply("/$cmd is not available in the Android app yet.")
             else -> reply("Unknown command. Send /help for the list.")
@@ -165,6 +188,16 @@ class TelegramBot(
         when (u.callbackData) {
             "confirm_kill" -> { api.editMessage(chat, mid, "Shutting down Kairos now."); host.kill() }
             "cancel_kill" -> api.editMessage(chat, mid, "Kill switch cancelled.")
+            "approve_skill" -> {
+                val d = denied("skills_manage")
+                val p = pendingSkill.remove(chat)
+                api.editMessage(chat, mid, when {
+                    d != null -> d
+                    p == null -> "No pending skill."
+                    else -> runCatching { host.createSkill(p.first, p.second); "Skill '${p.first}' created." }.getOrElse { "Skill creation failed: ${it.message}" }
+                })
+            }
+            "reject_skill" -> { pendingSkill.remove(chat); api.editMessage(chat, mid, "Skill rejected.") }
             else -> Unit
         }
     }
@@ -187,6 +220,9 @@ class TelegramBot(
             "/plans, /plan <id>, /newplan <goal> - durable plans",
             "/planagent <goal> - produce a durable plan",
             "/execute <goal> - plan and autonomously run the steps",
+            "/skills - list skills",
+            "/runs <name> [key=value ...] - run a skill",
+            "/newskill <name> <description> - generate a skill (asks to approve)",
             "/kill - kill switch (asks to confirm)",
             "/whoami - show your Telegram user ID",
         ).joinToString("\n")
