@@ -5,6 +5,12 @@ package org.kairos.agent
 import org.junit.Assert.*
 import org.junit.Test
 import org.kairos.agent.voice.VoiceText
+import org.kairos.agent.voice.VoskModels
+import java.io.ByteArrayOutputStream
+import java.io.File
+import java.nio.file.Files
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 
 class VoiceTextTest {
     @Test fun stripsMarkdownCodeAndLinks() {
@@ -33,5 +39,33 @@ class VoiceTextTest {
         assertEquals(0f, VoiceText.level(-10f), 0f)
         assertEquals(1f, VoiceText.level(50f), 0f)
         assertEquals(0.5f, VoiceText.level(4f), 0.001f)
+    }
+
+    private fun zip(vararg entries: String): ByteArray = ByteArrayOutputStream().also { bo ->
+        ZipOutputStream(bo).use { z -> entries.forEach { e -> z.putNextEntry(ZipEntry(e)); if (!e.endsWith("/")) z.write("x".toByteArray()); z.closeEntry() } }
+    }.toByteArray()
+
+    @Test fun voskJsonParsing() {
+        assertEquals("hello world", VoskModels.text("""{"partial" : "hello world"}"""))
+        assertEquals("turn on the light", VoskModels.text("""{"text" : "turn on the light"}"""))
+        assertEquals("", VoskModels.text("not json")); assertEquals("", VoskModels.text(null))
+    }
+
+    @Test fun voskModelUnzip() {
+        val dest = File(Files.createTempDirectory("vosk").toFile(), "model")
+        val root = VoskModels.unzipModel(zip("vosk-model-small/", "vosk-model-small/am/final.mdl", "vosk-model-small/conf/model.conf").inputStream(), dest)
+        assertEquals("vosk-model-small", root.name)
+        assertEquals(root.canonicalFile, VoskModels.installed(dest.parentFile)?.canonicalFile)
+        assertThrows(IllegalStateException::class.java) { VoskModels.unzipModel(zip("readme.txt").inputStream(), dest) }
+    }
+
+    @Test fun voskZipSlipRejected() {
+        val dest = File(Files.createTempDirectory("vosk").toFile(), "model")
+        assertThrows(SecurityException::class.java) { VoskModels.unzipModel(zip("../evil.txt").inputStream(), dest) }
+        assertFalse(File(dest.parentFile, "evil.txt").exists())
+    }
+
+    @Test fun voskModelUrlMustBeHttps() {
+        assertThrows(IllegalArgumentException::class.java) { VoskModels.download("http://x.org/m.zip", Files.createTempDirectory("v").toFile()) }
     }
 }

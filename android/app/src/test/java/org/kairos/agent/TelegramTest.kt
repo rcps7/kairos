@@ -58,6 +58,8 @@ class FakeHost(var allowed: Set<Long> = setOf(111L), var caps: Set<String>? = nu
     override suspend fun generateSkill(name: String, description: String) = "// name: $name\nfunction run(){return 1}"
     override fun createSkill(name: String, code: String): String { skillsMap[name] = "new"; return "$name.js" }
     override suspend fun git(sub: String, rest: String) = "git:$sub:$rest"
+    override suspend fun downloadMedia(url: String, fmt: String) =
+        if (url.startsWith("https://")) "Clip ($fmt)" to "/media/clip.$fmt" else throw IllegalArgumentException("Enter an http(s) URL.")
 }
 
 class TelegramTest {
@@ -133,10 +135,24 @@ class TelegramTest {
         bot.handle(msg(111, "/newplan Build a robot")); val pid = texts().last().removePrefix("Plan created: ")
         bot.handle(msg(111, "/plan $pid")); assertEquals("Build a robot [open]", texts().last())
         bot.handle(msg(111, "/execute ship it")); assertEquals("[execute] ship it done", texts().last())
-        bot.handle(msg(111, "/download x")); assertTrue(texts().last().contains("not available in the Android app yet"))
         bot.handle(msg(111, "/git commit")); assertEquals("Usage: /git commit <message>", texts().last())
         bot.handle(msg(111, "/git commit fix bug")); assertEquals("git:commit:fix bug", texts().last())
+        bot.handle(msg(111, "/image x")); assertTrue(texts().last().contains("not available in the Android app yet"))
         bot.handle(msg(111, "hello without slash")); assertTrue(texts().last().contains("not available")) // ignored: no new message
+    }
+
+    @Test fun downloadAsksForFormat() = runTest {
+        val h = FakeHost(); val bot = TelegramBot(api(), h)
+        bot.handle(msg(111, "/download")); assertEquals("Usage: /download <url>", texts().last())
+        bot.handle(msg(111, "/download https://example.org/v"))
+        assertEquals("Select format:", texts().last())
+        assertTrue(calls.last().second.toString().contains("dl_mp3"))
+        bot.handle(TgUpdate(20, 111, 111, null, 10, "cb", "dl_mp3"))
+        assertEquals("Downloaded: Clip (mp3)\nSaved to: /media/clip.mp3", texts("editMessageText").last())
+        bot.handle(TgUpdate(21, 111, 111, null, 10, "cb", "dl_mp4"))
+        assertEquals("No pending URL found.", texts("editMessageText").last())
+        bot.handle(msg(111, "/download ftp://x")); bot.handle(TgUpdate(22, 111, 111, null, 10, "cb", "dl_mp4"))
+        assertEquals("Download error: Enter an http(s) URL.", texts("editMessageText").last())
     }
 
     @Test fun skillCommandsWithApproval() = runTest {

@@ -24,7 +24,7 @@ const val ADVANCED_PROTOCOL = "ADVANCED TOOLS\nYou may also request these host t
     "  - read_email(limit)\n  - send_email(to, subject, body)\n" +
     "  - list_skills()\n  - run_skill(name, args)\n" +
     "  - git_status(repo)\n  - git_diff(staged, ref)\n  - git_log(n)\n  - git_branches()\n" +
-    "  - git_commit(message)\n  - git_branch(name)\n  - git_checkout(name)\n  - git_pull()\n  - git_push(remote, branch)"
+    "  - git_commit(message)\n  - git_branch(name)\n  - git_checkout(name)\n  - git_pull()\n  - git_push(remote, branch)\n  - download_media(url, format)  # format mp3 (audio) or mp4 (video)"
 
 class Engine(
     private val characters: CharacterRegistry,

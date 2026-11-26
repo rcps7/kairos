@@ -111,8 +111,8 @@ fun KairosRoot(vm: MainViewModel, app: KairosApp) {
             TopAppBar(title = { Text("KAIROS") }, actions = {
                 TextButton(onClick = { more = true }, modifier = Modifier.testTag("more")) { Text("More ▾") }
                 DropdownMenu(expanded = more, onDismissRequest = { more = false }) {
-                    listOf(7 to "Skills", 6 to "Connect", 8 to "Git").forEach { (i, t) ->
-                        DropdownMenuItem(text = { Text(if (t == "Connect") "Email & Telegram" else t) },
+                    listOf(7 to "Skills", 6 to "Connect", 8 to "Git", 9 to "Media").forEach { (i, t) ->
+                        DropdownMenuItem(text = { Text(when (t) { "Connect" -> "Email & Telegram"; "Media" -> "Media & Voice"; else -> t }) },
                             onClick = { tab = i; more = false }, modifier = Modifier.testTag("tab_$t"))
                     }
                 }
@@ -137,7 +137,8 @@ fun KairosRoot(vm: MainViewModel, app: KairosApp) {
                 5 -> PlansScreen(app)
                 6 -> ConnectScreen(app)
                 7 -> SkillsScreen(app)
-                else -> GitScreen(app)
+                8 -> GitScreen(app)
+                else -> MediaScreen(app)
             }
         }
     }
@@ -151,12 +152,32 @@ fun ChatScreen(vm: MainViewModel) {
     var listening by remember { mutableStateOf(false) }
     var level by remember { mutableFloatStateOf(0f) }
     var voiceMsg by remember { mutableStateOf("") }
-    val listener = remember {
+    val app = ctx.applicationContext as KairosApp
+    val system = remember {
         org.kairos.agent.voice.Listener(ctx,
             onLevel = { level = it },
             onPartial = { input = it },
             onResult = { input = it; listening = false; voiceMsg = "" },
             onError = { voiceMsg = it; listening = false })
+    }
+    var vosk by remember { mutableStateOf<org.kairos.agent.voice.VoskListener?>(null) }
+    // Pick the recognizer: the system one, or offline Vosk when chosen or when there is no system service.
+    val listener = remember {
+        object {
+            fun start() {
+                val model = org.kairos.agent.voice.VoskModels.installed(java.io.File(app.filesDir, "vosk"))
+                val engine = app.settings.voiceEngine
+                val useVosk = model != null && (engine == "vosk" || (engine == "auto" && !system.available()))
+                if (useVosk) {
+                    (vosk ?: org.kairos.agent.voice.VoskListener(model!!,
+                        level = { level = it }, partial = { input = it },
+                        result = { input = it; listening = false; voiceMsg = "" },
+                        fail = { voiceMsg = it; listening = false }).also { vosk = it }).start()
+                } else if (engine == "vosk") { voiceMsg = "Download an offline speech model in Media & Voice first."; listening = false }
+                else system.start()
+            }
+            fun stop() { system.stop(); vosk?.stop() }
+        }
     }
     DisposableEffect(Unit) { onDispose { listener.stop() } }
     val micPermission = androidx.activity.compose.rememberLauncherForActivityResult(
@@ -625,6 +646,111 @@ fun GitScreen(app: KairosApp) {
                 Text(out, Modifier.padding(top = 8.dp).testTag("git_out"),
                     style = LocalTextStyle.current.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace))
             }
+        }
+    }
+}
+
+
+/** Media downloads (desktop MediaDownloader + media library) and voice settings, including the Vosk model. */
+@Composable
+fun MediaScreen(app: KairosApp) {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val scope = rememberCoroutineScope()
+    var url by remember { mutableStateOf("") }
+    var progress by remember { mutableFloatStateOf(-1f) }
+    var line by remember { mutableStateOf("") }
+    var procId by remember { mutableStateOf<String?>(null) }
+    var library by remember { mutableStateOf(app.media.index.prune().sortedByDescending { it.createdAt }) }
+    var engine by remember { mutableStateOf(app.settings.voiceEngine) }
+    var modelUrl by remember { mutableStateOf(app.settings.voskModelUrl) }
+    val voskDir = java.io.File(app.filesDir, "vosk")
+    var voskReady by remember { mutableStateOf(org.kairos.agent.voice.VoskModels.installed(voskDir) != null) }
+    var voskMsg by remember { mutableStateOf("") }
+    val systemAvailable = remember { android.speech.SpeechRecognizer.isRecognitionAvailable(ctx) }
+
+    fun start(fmt: String) {
+        if (!app.characters.can("download_media")) { line = "'${app.characters.active().name}' is not permitted to download media."; return }
+        val id = java.util.UUID.randomUUID().toString(); procId = id; progress = 0f; line = "Preparing yt-dlp (first run unpacks it)…"
+        app.mediaScope.launch {
+            val msg = try {
+                val m = app.media.download(url, fmt, id) { p, l -> scope.launch { progress = p / 100f; line = l } }
+                "Saved: ${m.title}"
+            } catch (e: Exception) { "Download error: ${e.message}" }
+            scope.launch { line = msg; progress = -1f; procId = null; library = app.media.index.list().sortedByDescending { it.createdAt } }
+        }
+    }
+    fun open(item: org.kairos.agent.media.MediaItem, share: Boolean) = runCatching {
+        val uri = androidx.core.content.FileProvider.getUriForFile(ctx, ctx.packageName + ".files", java.io.File(item.path))
+        val mime = if (item.type == "audio") "audio/mpeg" else "video/mp4"
+        val i = if (share) android.content.Intent(android.content.Intent.ACTION_SEND).setType(mime).putExtra(android.content.Intent.EXTRA_STREAM, uri)
+                else android.content.Intent(android.content.Intent.ACTION_VIEW).setDataAndType(uri, mime)
+        ctx.startActivity(android.content.Intent.createChooser(i.addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION), item.title)
+            .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+    }.onFailure { line = "Can't open: ${it.message}" }
+
+    LazyColumn(Modifier.fillMaxSize().padding(12.dp).testTag("media")) {
+        item {
+            Text("Download audio / video", style = MaterialTheme.typography.titleMedium)
+            OutlinedTextField(url, { url = it }, Modifier.fillMaxWidth().testTag("media_url"), label = { Text("Video page URL") }, singleLine = true)
+            Row(Modifier.padding(vertical = 4.dp)) {
+                Button(enabled = url.isNotBlank() && procId == null, onClick = { start("mp3") }, modifier = Modifier.testTag("media_mp3")) { Text("MP3 (audio)") }
+                Spacer(Modifier.width(6.dp))
+                Button(enabled = url.isNotBlank() && procId == null, onClick = { start("mp4") }, modifier = Modifier.testTag("media_mp4")) { Text("MP4 (video)") }
+                Spacer(Modifier.width(6.dp))
+                if (procId != null) OutlinedButton(onClick = { procId?.let { app.media.cancel(it) } }) { Text("Cancel") }
+            }
+            if (progress >= 0f) LinearProgressIndicator(progress = { progress.coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth())
+            if (line.isNotEmpty()) Text(line, Modifier.testTag("media_status"), maxLines = 3)
+            OutlinedButton(onClick = {
+                line = "Updating yt-dlp…"
+                app.mediaScope.launch {
+                    val r = runCatching { app.media.ensureInit(); org.kairos.agent.media.YtDlpEngine(app).update() }
+                    scope.launch { line = r.fold({ "yt-dlp: $it (${app.media.version() ?: "?"})" }, { "Update failed: ${it.message}" }) }
+                }
+            }) { Text("Update yt-dlp") }
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
+            Text("Library (${library.size})", style = MaterialTheme.typography.titleMedium)
+        }
+        items(library, key = { it.id }) { m ->
+            Card(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                Column(Modifier.padding(10.dp)) {
+                    Text((if (m.type == "audio") "♪ " else "▶ ") + m.title)
+                    Row {
+                        TextButton(onClick = { open(m, false) }) { Text("Open") }
+                        TextButton(onClick = { open(m, true) }) { Text("Share") }
+                        TextButton(onClick = { app.media.index.remove(m.id); library = app.media.index.list().sortedByDescending { it.createdAt } }) { Text("Delete") }
+                    }
+                }
+            }
+        }
+        item {
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
+            Text("Voice input", style = MaterialTheme.typography.titleMedium)
+            Text(if (systemAvailable) "System speech recognition is available." else "No system speech recognition on this device — use offline (Vosk).")
+            listOf("auto" to "Automatic", "system" to "System recognizer", "vosk" to "Offline (Vosk)").forEach { (id, label) ->
+                Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                    RadioButton(selected = engine == id, onClick = { engine = id; app.settings.voiceEngine = id }, modifier = Modifier.testTag("voice_$id"))
+                    Text(label)
+                }
+            }
+            OutlinedTextField(modelUrl, { modelUrl = it }, Modifier.fillMaxWidth(), label = { Text("Vosk model URL (zip)") }, singleLine = true)
+            Text("Models for other languages: alphacephei.com/vosk/models")
+            Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                Button(onClick = {
+                    app.settings.voskModelUrl = modelUrl; voskMsg = "Downloading model…"
+                    app.mediaScope.launch {
+                        val r = runCatching {
+                            org.kairos.agent.voice.VoskModels.download(modelUrl, voskDir) { d, t ->
+                                if (d % (1 shl 20) < 65536) scope.launch { voskMsg = if (t > 0) "Downloading model… ${d * 100 / t}%" else "Downloading… ${d shr 20} MB" }
+                            }
+                        }
+                        scope.launch { voskReady = r.isSuccess; voskMsg = r.fold({ "Offline model installed." }, { "Model download failed: ${it.message}" }) }
+                    }
+                }) { Text(if (voskReady) "Re-download model" else "Download model") }
+                Spacer(Modifier.width(6.dp))
+                if (voskReady) OutlinedButton(onClick = { java.io.File(voskDir, "model").deleteRecursively(); voskReady = false; voskMsg = "Model removed." }) { Text("Remove") }
+            }
+            if (voskMsg.isNotEmpty()) Text(voskMsg)
         }
     }
 }

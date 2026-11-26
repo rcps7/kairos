@@ -34,10 +34,11 @@ interface BotHost {
     suspend fun generateSkill(name: String, description: String): String
     fun createSkill(name: String, code: String): String
     suspend fun git(sub: String, rest: String): String
+    suspend fun downloadMedia(url: String, fmt: String): Pair<String, String> // title, path
 }
 
 /** Commands handled on desktop that need a later Android feature (skills, media, git, …). */
-private val LATER = setOf("download", "expired", "reflect", "lessons", "ports",
+private val LATER = setOf("expired", "reflect", "lessons", "ports",
     "open", "send", "read", "close", "predict", "graph", "graphstats", "graphdel", "graphrepair", "pending",
     "usage", "tasks", "task", "deltask", "image", "webhooks", "write", "draw", "artifacts", "design", "browser")
 
@@ -50,6 +51,7 @@ class TelegramBot(
     @Volatile var running = false; private set
     private var offset = 0L
     private val pendingSkill = java.util.concurrent.ConcurrentHashMap<Long, Pair<String, String>>()
+    private val pendingUrl = java.util.concurrent.ConcurrentHashMap<Long, String>()
 
     fun authorized(userId: Long?): Boolean = userId != null && userId in host.allowedUserIds()
 
@@ -158,6 +160,12 @@ class TelegramBot(
                 api.sendMessage(chat, "Proposed skill '$name':\n\n${code.take(3500)}",
                     listOf("Approve" to "approve_skill", "Reject" to "reject_skill")); Unit
             }
+            "download" -> denied("download_media")?.let { reply(it) } ?: run {
+                val url = arg.substringBefore(' ').trim()
+                if (url.isEmpty()) return reply("Usage: /download <url>")
+                pendingUrl[chat] = url
+                api.sendMessage(chat, "Select format:", listOf("MP3 (audio)" to "dl_mp3", "MP4 (video)" to "dl_mp4"))
+            }
             "git" -> denied("git_ops")?.let { reply(it) } ?: run {
                 val sub = arg.substringBefore(' ').lowercase(); val rest = arg.substringAfter(' ', "").trim()
                 if (sub.isEmpty()) return reply("Usage: /git status|diff|log|branches|commit <msg>|branch <name>|checkout <name>|pull|push")
@@ -204,6 +212,14 @@ class TelegramBot(
                     else -> runCatching { host.createSkill(p.first, p.second); "Skill '${p.first}' created." }.getOrElse { "Skill creation failed: ${it.message}" }
                 })
             }
+            "dl_mp3", "dl_mp4" -> {
+                denied("download_media")?.let { api.editMessage(chat, mid, it); return }
+                val fmt = if (u.callbackData == "dl_mp3") "mp3" else "mp4"
+                val url = pendingUrl.remove(chat) ?: run { api.editMessage(chat, mid, "No pending URL found."); return }
+                api.editMessage(chat, mid, "Downloading as ${fmt.uppercase()} ...")
+                api.editMessage(chat, mid, try { val (t, p) = host.downloadMedia(url, fmt); "Downloaded: $t\nSaved to: $p" }
+                    catch (e: Exception) { "Download error: ${e.message}" })
+            }
             "reject_skill" -> { pendingSkill.remove(chat); api.editMessage(chat, mid, "Skill rejected.") }
             else -> Unit
         }
@@ -230,6 +246,7 @@ class TelegramBot(
             "/skills - list skills",
             "/runs <name> [key=value ...] - run a skill",
             "/newskill <name> <description> - generate a skill (asks to approve)",
+            "/download <url> - download audio (MP3) or video (MP4)",
             "/git status|diff|log|branches|commit <msg>|branch <name>|checkout <name>|pull|push - git workflows",
             "/kill - kill switch (asks to confirm)",
             "/whoami - show your Telegram user ID",

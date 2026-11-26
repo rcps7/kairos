@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Downloaded media shared through FileProvider (Open / Share in Media & Voice). -->
+<paths>
+    <external-files-path name="media" path="media/" />
+    <files-path name="media_internal" path="media/" />
+</paths>

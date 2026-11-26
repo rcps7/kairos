@@ -126,6 +126,39 @@ class DeviceTest {
         dir.deleteRecursively()
     }
 
+    /** yt-dlp (Python) runs on the device: a direct MP4 from a local HTTP server is downloaded and indexed. */
+    @Test fun mediaDownloadOnDevice() {
+        val app = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext as KairosApp
+        val payload = ByteArray(64 * 1024) { (it % 251).toByte() }
+        val server = java.net.ServerSocket(0, 50, java.net.InetAddress.getByName("127.0.0.1"))
+        val t = Thread {
+            while (!server.isClosed) {
+                val sock = runCatching { server.accept() }.getOrNull() ?: break
+                sock.use { s ->
+                    val r = s.getInputStream().bufferedReader()
+                    val first = r.readLine() ?: return@use
+                    while (true) { val l = r.readLine() ?: break; if (l.isEmpty()) break }
+                    val head = first.startsWith("HEAD")
+                    val o = s.getOutputStream()
+                    o.write(("HTTP/1.1 200 OK\r\nContent-Type: video/mp4\r\nContent-Length: ${payload.size}\r\n" +
+                        "Accept-Ranges: none\r\nConnection: close\r\n\r\n").toByteArray())
+                    if (!head) o.write(payload)
+                    o.flush()
+                }
+            }
+        }.apply { isDaemon = true; start() }
+        try {
+            val item = app.media.download("http://127.0.0.1:${server.localPort}/clip.mp4", "mp4")
+            assertEquals("video", item.type)
+            val f = java.io.File(item.path)
+            assertTrue("file exists: ${item.path}", f.isFile)
+            assertEquals(payload.size.toLong(), f.length())
+            assertTrue(app.media.index.list().any { it.id == item.id })
+            assertNotNull(app.media.version())
+            app.media.index.remove(item.id)
+        } finally { server.close(); t.join(2000) }
+    }
+
     /** The Speak toggle persists and the Talk button is present. */
     @Test fun voiceControlsPresent() {
         val app = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext as KairosApp

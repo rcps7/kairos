@@ -55,6 +55,8 @@ android {
     buildFeatures { compose = true }
     testOptions { unitTests.isReturnDefaultValues = true }
     packaging {
+        // youtubedl-android executes libpython/ffmpeg from nativeLibraryDir, so they must be extracted.
+        jniLibs.useLegacyPackaging = true
         resources.excludes += setOf("META-INF/LICENSE.md", "META-INF/NOTICE.md", "about.html", "plugin.properties")
         resources.pickFirsts += setOf("META-INF/mailcap", "META-INF/mailcap.default", "META-INF/mimetypes.default", "META-INF/javamail.providers", "META-INF/javamail.default.providers", "META-INF/javamail.default.address.map")
     }
@@ -79,6 +81,11 @@ dependencies {
     implementation("org.mozilla:rhino:1.7.15")
     // JGit for git workflows: EDL-1.0 (BSD-3-Clause). 5.13 is the last line targeting Java 8 APIs.
     implementation("org.eclipse.jgit:org.eclipse.jgit:5.13.3.202401111512-r")
+    // yt-dlp + Python + ffmpeg for media downloads: GPL-3.0 (approved by the owner)
+    implementation("io.github.junkfood02.youtubedl-android:library:0.18.1")
+    implementation("io.github.junkfood02.youtubedl-android:ffmpeg:0.18.1")
+    // Vosk offline speech recognition: Apache-2.0 (approved by the owner); pulls JNA (LGPL-2.1/Apache-2.0)
+    implementation("com.alphacephei:vosk-android:0.3.75")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 

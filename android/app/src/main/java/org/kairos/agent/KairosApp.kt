@@ -54,6 +54,13 @@ class KairosApp : Application() {
     lateinit var backend: ChatBackend
     lateinit var git: GitTool
     val speaker by lazy { org.kairos.agent.voice.Speaker(this) }
+    /** yt-dlp/ffmpeg are unpacked on first use (a few seconds), not at app start. */
+    val media by lazy {
+        org.kairos.agent.media.MediaDownloader(org.kairos.agent.media.YtDlpEngine(this),
+            org.kairos.agent.media.MediaIndex(java.io.File(filesDir, "media.json")),
+            getExternalFilesDir("media") ?: java.io.File(filesDir, "media"))
+    }
+    val mediaScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO)
 
     fun gitConfig() = GitConfig(settings.gitEnabled, settings.gitAllowPush, settings.gitAllowPull,
         settings.gitAuthorName, settings.gitAuthorEmail, secrets.get(SecureStore.GIT_TOKEN), settings.gitActiveRepo)
@@ -128,7 +135,7 @@ class KairosApp : Application() {
                 override fun add(url: String, title: String, html: String, text: String, summary: String) =
                     store.addDocument(url, title, html, text, summary)
             },
-            fallback = PlanTools(store, EmailTools(characters, EmailClient { emailConfig() }, SkillTools(characters, skills, GitTools(characters, git)))),
+            fallback = PlanTools(store, EmailTools(characters, EmailClient { emailConfig() }, SkillTools(characters, skills, GitTools(characters, git, org.kairos.agent.agent.MediaTools(characters, { media }))))),
         )
         email = EmailClient { emailConfig() }
         engine = Engine(characters, mem, backend, tools = webTools)
@@ -181,6 +188,8 @@ class AppBotHost(private val app: KairosApp) : BotHost {
     }
     override suspend fun generateSkill(name: String, description: String) = app.generateSkill(name, description)
     override fun createSkill(name: String, code: String) = app.skills.createSkill(name, code).name
+    override suspend fun downloadMedia(url: String, fmt: String): Pair<String, String> =
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { app.media.download(url, fmt).let { it.title to it.path } }
     override suspend fun git(sub: String, rest: String): String = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
         val g = app.git
         when (sub) {

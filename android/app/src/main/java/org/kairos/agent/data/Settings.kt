@@ -81,6 +81,13 @@ class Settings(context: Context) {
         set(v) = p.edit().putString("git_active_repo", v.trim()).apply()
 
     // ---- Voice ----
+    /** "auto" (system recognizer, Vosk if none), "system" or "vosk". */
+    var voiceEngine: String
+        get() = p.getString("voice_engine", "auto")!!
+        set(v) = p.edit().putString("voice_engine", v).apply()
+    var voskModelUrl: String
+        get() = p.getString("vosk_model_url", org.kairos.agent.voice.VoskModels.DEFAULT_URL)!!
+        set(v) = p.edit().putString("vosk_model_url", v.trim()).apply()
     var speakReplies: Boolean
         get() = p.getBoolean("speak_replies", false)
         set(v) = p.edit().putBoolean("speak_replies", v).apply()
