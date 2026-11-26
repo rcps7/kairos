@@ -65,8 +65,9 @@ class MediaTest {
         assertEquals(1, eng.inits) // engine unpacked once
         assertEquals(2, m.index.list().size)
         // Re-downloading the same file replaces its entry.
-        m.download("https://example.org/watch?v=1", "mp4"); assertEquals(2, m.index.list().size)
-        assertTrue(m.index.remove(v.id)); assertFalse(File(v.path).exists()); assertEquals(1, m.index.list().size)
+        val v2 = m.download("https://example.org/watch?v=1", "mp4"); assertEquals(2, m.index.list().size)
+        assertFalse(m.index.remove(v.id)) // replaced entry
+        assertTrue(m.index.remove(v2.id)); assertFalse(File(v2.path).exists()); assertEquals(1, m.index.list().size)
         File(a.path).delete(); assertTrue(m.index.prune().isEmpty())
         assertEquals("2025.11.12", m.version())
     }
