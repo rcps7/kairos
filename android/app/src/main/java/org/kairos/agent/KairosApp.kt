@@ -62,6 +62,9 @@ class KairosApp : Application() {
     }
     fun remote(): org.kairos.agent.remote.RemoteClient? = secrets.get(SecureStore.REMOTE_PAIRING)
         ?.let { runCatching { org.kairos.agent.remote.RemoteClient(org.kairos.agent.remote.PairingLink.parse(it)) }.getOrNull() }
+    val browserPage by lazy { org.kairos.agent.browser.WebViewPage(this) }
+    val browserAgent by lazy { org.kairos.agent.browser.BrowserAgent({ browserPage }, java.io.File(filesDir, "browser")) }
+    val serialPorts: org.kairos.agent.serial.SerialPorts by lazy { org.kairos.agent.serial.UsbSerialPorts(this) }
     val mediaScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO)
 
     fun gitConfig() = GitConfig(settings.gitEnabled, settings.gitAllowPush, settings.gitAllowPull,
@@ -137,7 +140,8 @@ class KairosApp : Application() {
                 override fun add(url: String, title: String, html: String, text: String, summary: String) =
                     store.addDocument(url, title, html, text, summary)
             },
-            fallback = PlanTools(store, EmailTools(characters, EmailClient { emailConfig() }, SkillTools(characters, skills, GitTools(characters, git, org.kairos.agent.agent.MediaTools(characters, { media }))))),
+            fallback = PlanTools(store, EmailTools(characters, EmailClient { emailConfig() }, SkillTools(characters, skills, GitTools(characters, git, org.kairos.agent.agent.MediaTools(characters, { media },
+                org.kairos.agent.agent.BrowserTools(characters, { browserAgent }, org.kairos.agent.agent.SerialTools(characters, { serialPorts }))))))),
         )
         email = EmailClient { emailConfig() }
         engine = Engine(characters, mem, backend, tools = webTools)

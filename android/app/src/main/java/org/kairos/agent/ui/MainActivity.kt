@@ -111,8 +111,8 @@ fun KairosRoot(vm: MainViewModel, app: KairosApp) {
             TopAppBar(title = { Text("KAIROS") }, actions = {
                 TextButton(onClick = { more = true }, modifier = Modifier.testTag("more")) { Text("More ▾") }
                 DropdownMenu(expanded = more, onDismissRequest = { more = false }) {
-                    listOf(10 to "PC", 7 to "Skills", 6 to "Connect", 8 to "Git", 9 to "Media").forEach { (i, t) ->
-                        DropdownMenuItem(text = { Text(when (t) { "Connect" -> "Email & Telegram"; "Media" -> "Media & Voice"; "PC" -> "PC remote"; else -> t }) },
+                    listOf(10 to "PC", 11 to "Browser", 12 to "Serial", 7 to "Skills", 6 to "Connect", 8 to "Git", 9 to "Media").forEach { (i, t) ->
+                        DropdownMenuItem(text = { Text(when (t) { "Connect" -> "Email & Telegram"; "Media" -> "Media & Voice"; "PC" -> "PC remote"; "Serial" -> "USB serial"; else -> t }) },
                             onClick = { tab = i; more = false }, modifier = Modifier.testTag("tab_$t"))
                     }
                 }
@@ -139,7 +139,9 @@ fun KairosRoot(vm: MainViewModel, app: KairosApp) {
                 7 -> SkillsScreen(app)
                 8 -> GitScreen(app)
                 9 -> MediaScreen(app)
-                else -> PcScreen(app)
+                10 -> PcScreen(app)
+                11 -> BrowserScreen(app)
+                else -> SerialScreen(app)
             }
         }
     }

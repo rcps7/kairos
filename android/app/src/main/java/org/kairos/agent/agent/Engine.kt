@@ -24,7 +24,13 @@ const val ADVANCED_PROTOCOL = "ADVANCED TOOLS\nYou may also request these host t
     "  - read_email(limit)\n  - send_email(to, subject, body)\n" +
     "  - list_skills()\n  - run_skill(name, args)\n" +
     "  - git_status(repo)\n  - git_diff(staged, ref)\n  - git_log(n)\n  - git_branches()\n" +
-    "  - git_commit(message)\n  - git_branch(name)\n  - git_checkout(name)\n  - git_pull()\n  - git_push(remote, branch)\n  - download_media(url, format)  # format mp3 (audio) or mp4 (video)"
+    "  - git_commit(message)\n  - git_branch(name)\n  - git_checkout(name)\n  - git_pull()\n  - git_push(remote, branch)\n  - download_media(url, format)  # format mp3 (audio) or mp4 (video)\n" +
+    "  - browser_goto(url)\n  - browser_read(selector)\n  - browser_inputs()\n  - browser_fill(target, value)  # target = label, name or CSS selector\n" +
+    "  - browser_form(fields)  # JSON object label -> value\n  - browser_click(target)  # selector or visible text\n" +
+    "  - browser_key(key, target)\n  - browser_mouse(x, y)\n  - browser_js(code)\n  - browser_action(steps)  # JSON list of {op: goto|click|fill|key|drag|scroll|wait|read|screenshot}\n" +
+    "  - browser_back()\n  - browser_screenshot()\n  - browser_captcha()  # detect only; the user solves CAPTCHAs\n" +
+    "  - serial_list()\n  - serial_open(device, baud)\n  - serial_write(device, data)  # supports \\n and \\xNN\n" +
+    "  - serial_read(device, timeout_ms)\n  - serial_send(device, data, baud)  # write a line and return the reply\n  - serial_close(device)"
 
 class Engine(
     private val characters: CharacterRegistry,

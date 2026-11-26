@@ -224,4 +224,64 @@ class DeviceTest {
         }
         server.close()
     }
+
+    /** Browser Agent on a real WebView: open a local page, fill a form by label, submit by button text, read the result. */
+    @Test fun browserAgentFillsFormOnDevice() {
+        val app = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext as KairosApp
+        val form = "<html><head><title>Form</title></head><body><form action='/done' method='get'>" +
+            "<label for='n'>Your name</label><input id='n' name='who'><button type='submit'>Send</button></form></body></html>"
+        val server = java.net.ServerSocket(0, 50, java.net.InetAddress.getByName("127.0.0.1"))
+        Thread {
+            while (!server.isClosed) {
+                val sock = runCatching { server.accept() }.getOrNull() ?: break
+                sock.use { s ->
+                    val r = s.getInputStream().bufferedReader()
+                    val first = r.readLine() ?: return@use
+                    while (true) { val l = r.readLine() ?: break; if (l.isEmpty()) break }
+                    val path = first.split(" ").getOrElse(1) { "/" }
+                    val body = if (path.startsWith("/done")) "<html><body><h1>Hello " +
+                        java.net.URLDecoder.decode(path.substringAfter("who=", ""), "UTF-8") + "</h1></body></html>" else form
+                    val bytes = body.toByteArray()
+                    s.getOutputStream().apply {
+                        write(("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: ${bytes.size}\r\nConnection: close\r\n\r\n").toByteArray())
+                        write(bytes); flush()
+                    }
+                }
+            }
+        }.apply { isDaemon = true; start() }
+        try {
+            val tools = org.kairos.agent.agent.BrowserTools(app.characters, { app.browserAgent })
+            kotlinx.coroutines.runBlocking {
+                val opened = tools.run(org.kairos.agent.agent.ToolCall("browser_goto", mapOf("url" to "http://127.0.0.1:${server.localPort}/")))
+                assertTrue(opened, opened.contains("Your name"))
+                val inputs = tools.run(org.kairos.agent.agent.ToolCall("browser_inputs"))
+                assertTrue(inputs, inputs.contains("\"label\":\"Your name\""))
+                val filled = tools.run(org.kairos.agent.agent.ToolCall("browser_fill", mapOf("target" to "Your name", "value" to "Kairos")))
+                assertEquals("filled input#n[name=who]", filled)
+                val clicked = tools.run(org.kairos.agent.agent.ToolCall("browser_click", mapOf("target" to "Send")))
+                assertTrue(clicked, clicked.contains("/done?who=Kairos"))
+                val read = tools.run(org.kairos.agent.agent.ToolCall("browser_read", mapOf("selector" to "h1")))
+                assertEquals("Hello Kairos", read)
+                val shot = tools.run(org.kairos.agent.agent.ToolCall("browser_screenshot"))
+                assertTrue(shot, shot.startsWith("Screenshot saved:") && java.io.File(shot.substringAfter(": ")).length() > 0)
+            }
+            // The same WebView shows in the Browser screen with the agent's page.
+            compose.onNodeWithTag("more").performClick(); compose.onNodeWithTag("tab_Browser").performClick()
+            compose.onNodeWithTag("browser_view").assertExists()
+            compose.onNodeWithTag("browser_url").assertTextContains("/done?who=Kairos", substring = true)
+        } finally { server.close() }
+    }
+
+    /** USB serial: the emulator has no USB host devices, so the screen and tool report none (driver logic is unit-tested). */
+    @Test fun serialScreenOnDevice() {
+        val app = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext as KairosApp
+        compose.onNodeWithTag("more").performClick(); compose.onNodeWithTag("tab_Serial").performClick()
+        compose.onNodeWithTag("serial").assertExists()
+        val out = kotlinx.coroutines.runBlocking { org.kairos.agent.agent.SerialTools(app.characters, { app.serialPorts })
+            .run(org.kairos.agent.agent.ToolCall("serial_list")) }
+        if (app.serialPorts.list().isEmpty()) {
+            compose.onNodeWithTag("serial_none").assertExists()
+            assertTrue(out, out.contains("no USB serial devices"))
+        }
+    }
 }
