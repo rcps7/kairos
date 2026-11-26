@@ -1,0 +1,9 @@
+<resources>
+    <!-- Dark launch window background (matches the Compose dark surface). -->
+    <style name="Theme.Kairos" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">#FF0E1116</item>
+        <item name="android:statusBarColor">#FF0E1116</item>
+        <item name="android:navigationBarColor">#FF0E1116</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>

@@ -34,6 +34,9 @@ interface MediaEngine {
     fun run(url: String, options: List<Pair<String, String?>>, processId: String, progress: (Float, String) -> Unit): String
     fun cancel(processId: String): Boolean
     fun version(): String?
+
+    /** True when a real engine is present; false in the F-Droid flavour (no yt-dlp). */
+    fun available(): Boolean = true
 }
 
 object YtdlArgs {
@@ -88,4 +91,7 @@ class MediaDownloader(private val engine: MediaEngine, val index: MediaIndex, va
 
     fun cancel(processId: String) = engine.cancel(processId)
     fun version() = runCatching { ensureInit(); engine.version() }.getOrNull()
+
+    /** Whether on-device media download is available in this build. */
+    fun available(): Boolean = engine.available()
 }

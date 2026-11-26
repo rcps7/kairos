@@ -56,7 +56,7 @@ class KairosApp : Application() {
     val speaker by lazy { org.kairos.agent.voice.Speaker(this) }
     /** yt-dlp/ffmpeg are unpacked on first use (a few seconds), not at app start. */
     val media by lazy {
-        org.kairos.agent.media.MediaDownloader(org.kairos.agent.media.YtDlpEngine(this),
+        org.kairos.agent.media.MediaDownloader(org.kairos.agent.media.MediaEngines.create(this),
             org.kairos.agent.media.MediaIndex(java.io.File(filesDir, "media.json")),
             getExternalFilesDir("media") ?: java.io.File(filesDir, "media"))
     }
@@ -141,7 +141,7 @@ class KairosApp : Application() {
                     store.addDocument(url, title, html, text, summary)
             },
             fallback = PlanTools(store, EmailTools(characters, EmailClient { emailConfig() }, SkillTools(characters, skills, GitTools(characters, git, org.kairos.agent.agent.MediaTools(characters, { media },
-                org.kairos.agent.agent.BrowserTools(characters, { browserAgent }, org.kairos.agent.agent.SerialTools(characters, { serialPorts }))))))),
+                org.kairos.agent.agent.BrowserTools(characters, { browserAgent }, org.kairos.agent.agent.SerialTools(characters, { serialPorts }, allowWrite = { settings.serialWriteAllowed }))))))),
         )
         email = EmailClient { emailConfig() }
         engine = Engine(characters, mem, backend, tools = webTools)

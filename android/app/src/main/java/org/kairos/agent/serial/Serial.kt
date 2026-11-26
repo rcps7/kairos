@@ -76,7 +76,16 @@ object SerialChips {
 class SerialConnection(val chip: Chip, private val t: UsbTransport, private val iface: Int = 0) {
     private val outV = 0x40; private val inV = 0xC0
 
+    /** Set once the port is being released, so in-flight transfers stop cleanly. */
+    @Volatile
+    var closed: Boolean = false
+        private set
+
+    fun markClosed() { closed = true }
+
+    @Synchronized
     fun configure(baud: Int) {
+        if (closed) return
         when (chip) {
             Chip.CDC_ACM -> {
                 t.control(0x21, 0x20, 0, iface, SerialChips.cdcLineCoding(baud))      // SET_LINE_CODING
@@ -112,13 +121,17 @@ class SerialConnection(val chip: Chip, private val t: UsbTransport, private val 
         }
     }
 
+    @Synchronized
     private fun setCh34xBaud(baud: Int) {
+        if (closed) return
         val (a, b) = SerialChips.ch34xBaud(baud)
         t.control(outV, 0x9A, 0x1312, a, null)
         t.control(outV, 0x9A, 0x0F2C, b, null)
     }
 
+    @Synchronized
     fun write(data: ByteArray, timeoutMs: Int = 2000): Int {
+        if (closed) throw java.io.IOException("USB port is closed")
         var off = 0
         while (off < data.size) {
             val chunk = data.copyOfRange(off, minOf(off + t.maxPacket.coerceAtLeast(16), data.size))
@@ -130,7 +143,9 @@ class SerialConnection(val chip: Chip, private val t: UsbTransport, private val 
     }
 
     /** One read (up to a few packets); empty when nothing arrives within [timeoutMs]. */
+    @Synchronized
     fun readOnce(timeoutMs: Int): ByteArray {
+        if (closed) return ByteArray(0)
         val buf = ByteArray(t.maxPacket.coerceAtLeast(64) * 4)
         val n = t.bulkIn(buf, timeoutMs)
         if (n <= 0) return ByteArray(0)
@@ -142,7 +157,7 @@ class SerialConnection(val chip: Chip, private val t: UsbTransport, private val 
         val out = ByteArrayOutputStream()
         val end = System.currentTimeMillis() + totalMs
         var quietSince = System.currentTimeMillis()
-        while (System.currentTimeMillis() < end && out.size() < max) {
+        while (!closed && System.currentTimeMillis() < end && out.size() < max) {
             val b = readOnce(100)
             if (b.isNotEmpty()) { out.write(b); quietSince = System.currentTimeMillis() }
             else if (out.size() > 0 && System.currentTimeMillis() - quietSince >= idleMs) break

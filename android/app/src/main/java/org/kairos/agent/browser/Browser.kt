@@ -38,7 +38,7 @@ function __kFind(t, clickable) {
       if (f) return f;
     }
   }
-  var els = document.querySelectorAll('input,textarea,select,button,a,[role=button],[onclick],summary');
+  var els = document.querySelectorAll('input,textarea,select,button,a,[role=button],[onclick],[contenteditable="true"],summary');
   var pass = clickable ? 2 : 1;
   for (var p = 0; p < pass; p++) for (var i = 0; i < els.length; i++) {
     var e = els[i];
@@ -62,15 +62,21 @@ function __kDesc(e) { return e.tagName.toLowerCase() + (e.id ? '#' + e.id : '') 
 
     fun forms() = """(function(){
   var out = [];
-  var els = document.querySelectorAll('input,textarea,select');
+  var els = document.querySelectorAll('input,textarea,select,[contenteditable="true"]');
   for (var i = 0; i < els.length && out.length < 80; i++) {
     var e = els[i]; var t = (e.type || e.tagName).toLowerCase();
     if (t === 'hidden') continue;
     var lab = '';
     if (e.id) { var l = document.querySelector('label[for="' + e.id + '"]'); if (l) lab = l.innerText.trim(); }
     if (!lab && e.closest && e.closest('label')) lab = e.closest('label').innerText.trim();
+    var r = e.getBoundingClientRect();
+    // Values are masked by default: page text is sent to the LLM, so never leak
+    // typed secrets. Checkbox/radio state and select options are safe to show.
+    var safeValue = (t === 'checkbox' || t === 'radio') ? String(e.checked)
+      : (t === 'select' ? String(e.value || '').slice(0, 80) : (e.isContentEditable ? (e.innerText ? '***' : '') : (e.value ? '***' : '')));
     out.push({tag: e.tagName.toLowerCase(), type: t, name: e.name || '', id: e.id || '', label: lab,
-      placeholder: e.placeholder || '', value: t === 'password' ? (e.value ? '***' : '') : (t === 'checkbox' || t === 'radio' ? String(e.checked) : String(e.value || '').slice(0, 80))});
+      placeholder: e.placeholder || '', value: safeValue,
+      rect: {x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height)}});
   }
   return JSON.stringify(out);
 })()"""
@@ -86,6 +92,8 @@ function __kDesc(e) { return e.tagName.toLowerCase() + (e.id ? '#' + e.id : '') 
     for (var i = 0; i < e.options.length; i++) { var o = e.options[i];
       if (o.value === v || o.text.trim().toLowerCase() === v.trim().toLowerCase()) { e.selectedIndex = i; ok = true; break; } }
     if (!ok) return 'NO_OPTION: ' + v;
+  } else if (e.isContentEditable) {
+    e.innerText = v;
   } else {
     var proto = e.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
     var setter = Object.getOwnPropertyDescriptor(proto, 'value').set; setter.call(e, v);
@@ -103,10 +111,12 @@ function __kDesc(e) { return e.tagName.toLowerCase() + (e.id ? '#' + e.id : '') 
 })(${q(target)})"""
 
     fun clickAt(x: Int, y: Int) = """(function(x, y){
-  var e = document.elementFromPoint(x, y);
-  if (!e) return 'NOT_FOUND: nothing at ' + x + ',' + y;
-  ['mousedown', 'mouseup'].forEach(function(n){ e.dispatchEvent(new MouseEvent(n, {bubbles: true, clientX: x, clientY: y})); });
-  e.click(); return 'clicked ' + e.tagName.toLowerCase() + ' at ' + x + ',' + y;
+  var dpr = window.devicePixelRatio || 1;
+  var cx = x / dpr, cy = y / dpr;
+  var e = document.elementFromPoint(cx, cy);
+  if (!e) return 'NOT_FOUND: nothing at ' + Math.round(cx) + ',' + Math.round(cy);
+  ['mousedown', 'mouseup'].forEach(function(n){ e.dispatchEvent(new MouseEvent(n, {bubbles: true, clientX: cx, clientY: cy})); });
+  e.click(); return 'clicked ' + e.tagName.toLowerCase() + ' at ' + Math.round(cx) + ',' + Math.round(cy);
 })($x, $y)"""
 
     fun key(target: String?, key: String) = FIND + """(function(t, k){
@@ -193,23 +203,31 @@ class BrowserAgent(private val page: () -> BrowserPage, private val shotsDir: Fi
 
     /** browser_action: a list of steps like [{"op":"click","target":"Send"},{"op":"type",...}]. */
     suspend fun actions(stepsJson: String): String {
-        val steps = Json.parseToJsonElement(stepsJson).jsonArray
-        return steps.mapIndexed { i, s ->
-            val o = s.jsonObject
-            fun a(k: String) = o[k]?.jsonPrimitive?.contentOrNull
-            val r = when (a("op")) {
-                "goto" -> { page().load(checkUrl(a("url").orEmpty())); "opened ${page().url}" }
-                "click" -> click(a("target").orEmpty())
-                "fill", "type" -> fill(a("target").orEmpty(), a("value") ?: a("text").orEmpty())
-                "key" -> key(a("target"), a("key") ?: "Enter")
-                "drag" -> page().eval(BrowserScripts.drag(a("from").orEmpty(), a("to").orEmpty()))
-                "scroll" -> page().eval(BrowserScripts.scroll(a("dy")?.toIntOrNull() ?: 600))
-                "wait" -> { kotlinx.coroutines.delay((a("ms")?.toLongOrNull() ?: 1000).coerceAtMost(15000)); "waited" }
-                "text", "read" -> read(a("target") ?: a("selector"))
-                "screenshot" -> screenshot()
-                else -> "unknown op '${a("op")}'"
-            }
+        val steps = runCatching { Json.parseToJsonElement(stepsJson).jsonArray }.getOrNull()
+            ?: return "(browser_action: steps must be a JSON list)"
+        return steps.take(MAX_ACTIONS).mapIndexed { i, s ->
+            val r = try {
+                val o = s.jsonObject
+                fun a(k: String) = o[k]?.jsonPrimitive?.contentOrNull
+                when (a("op")) {
+                    "goto" -> { page().load(checkUrl(a("url").orEmpty())); "opened ${page().url}" }
+                    "click" -> click(a("target").orEmpty())
+                    "fill", "type" -> fill(a("target").orEmpty(), a("value") ?: a("text").orEmpty())
+                    "key" -> key(a("target"), a("key") ?: "Enter")
+                    "drag" -> page().eval(BrowserScripts.drag(a("from").orEmpty(), a("to").orEmpty()))
+                    "scroll" -> page().eval(BrowserScripts.scroll(a("dy")?.toIntOrNull() ?: 600))
+                    "wait" -> { kotlinx.coroutines.delay((a("ms")?.toLongOrNull() ?: 1000).coerceAtMost(15000)); "waited" }
+                    "text", "read" -> read(a("target") ?: a("selector"))
+                    "screenshot" -> screenshot()
+                    else -> "unknown op '${a("op")}'"
+                }
+            } catch (e: Exception) { "error: ${e.message}" }
             "${i + 1}. $r"
         }.joinToString("\n")
+    }
+
+    private companion object {
+        /** Cap a single browser_action list so a runaway model cannot loop forever. */
+        const val MAX_ACTIONS = 50
     }
 }

@@ -135,6 +135,8 @@ class DeviceTest {
     /** yt-dlp (Python) runs on the device: a direct MP4 from a local HTTP server is downloaded and indexed. */
     @Test fun mediaDownloadOnDevice() {
         val app = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext as KairosApp
+        // The `fdroid` flavour has no yt-dlp; this test only runs on the `full` build.
+        org.junit.Assume.assumeTrue("media download needs the 'full' build", app.media.available())
         val payload = ByteArray(64 * 1024) { (it % 251).toByte() }
         val server = java.net.ServerSocket(0, 50, java.net.InetAddress.getByName("127.0.0.1"))
         val t = Thread {

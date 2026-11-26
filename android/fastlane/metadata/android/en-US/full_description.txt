@@ -1,0 +1,20 @@
+KAIROS is a self-evolving AI agent for your phone. **Developed by RC.** GPLv3, no trackers, no ads.
+
+Chat with any OpenAI-compatible provider (Moonshot/Kimi, DeepSeek, OpenAI, OpenRouter, Groq or a custom endpoint) and give it tools:
+
+- Web search, page scraping and a searchable knowledge library
+- Agent Characters with per-character tool permissions
+- Retained memory plus durable plans (Plan and Execute modes)
+- Git workflows (init, clone, commit, log, pull and push) with your own token
+- Email (IMAP/SMTP) and a Telegram bot with a user allowlist and a kill switch
+- Skills written in a sandboxed JavaScript engine
+- Browser Agent: drive a built-in WebView to browse, fill forms and hand CAPTCHAs to you
+- USB OTG serial (CDC-ACM, CP210x, CH34x, FTDI) for ESP32, Arduino and Pico boards
+- Remote control of KAIROS running on your PC over your home network, end-to-end encrypted and paired by QR code
+- Voice: system speech recognition (or offline Vosk) and spoken replies
+
+Two builds are provided:
+- **fdroid**: everything except on-device media download (this build). Small and fully free software.
+- **full**: adds yt-dlp + ffmpeg for downloading audio/video. Distributed via IzzyOnDroid and GitHub Releases.
+
+All secrets (API keys, tokens, passwords) are encrypted with the Android Keystore and never leave the device except to the services you configure.

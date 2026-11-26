@@ -57,6 +57,8 @@ class SerialTools(
     private val characters: CharacterRegistry,
     private val ports: () -> SerialPorts,
     private val next: ToolRunner? = null,
+    /** Whether the agent may transmit to the device (user setting). */
+    private val allowWrite: () -> Boolean = { true },
 ) : ToolRunner {
     override suspend fun run(call: ToolCall): String {
         if (!call.name.startsWith("serial_")) return next?.run(call) ?: "(unknown tool: ${call.name})"
@@ -64,6 +66,8 @@ class SerialTools(
         val a = call.args
         val dev = a["device"] ?: a["port"] ?: "0"
         val baud = a["baud"]?.toIntOrNull() ?: a["baudrate"]?.toIntOrNull() ?: 115200
+        val writing = call.name == "serial_write" || call.name == "serial_send"
+        if (writing && !allowWrite()) return "(serial writes are disabled in Settings; enable 'Allow agent serial writes')"
         val p = ports()
         return withContext(Dispatchers.IO) {
             try {
@@ -73,17 +77,28 @@ class SerialTools(
                     }?.joinToString("\n") ?: "(no USB serial devices; connect a board with a USB OTG adapter)"
                     "serial_open" -> p.open(dev, baud)
                     "serial_close" -> { p.close(dev); "Closed $dev." }
-                    "serial_write" -> { val n = p.write(dev, SerialText.unescape(a["data"] ?: a["text"].orEmpty())); "Wrote $n bytes." }
+                    "serial_write" -> {
+                        val bytes = SerialText.unescape(a["data"] ?: a["text"].orEmpty())
+                        val n = p.write(dev, bytes.copyOf(minOf(bytes.size, MAX_SERIAL_BYTES)))
+                        "Wrote $n bytes."
+                    }
                     "serial_read" -> SerialText.show(p.read(dev, a["timeout_ms"]?.toLongOrNull() ?: 1500)).ifEmpty { "(no data)" }
                     "serial_send" -> {
                         if (!p.isOpen(dev)) { val r = p.open(dev, baud); if (!r.startsWith("Opened")) return@withContext r }
                         val data = a["data"] ?: a["text"].orEmpty()
-                        p.write(dev, SerialText.unescape(if (a["newline"] == "false" || data.endsWith("\\n")) data else data + "\\n"))
+                        val line = if (a["newline"] == "false" || data.endsWith("\\n")) data else data + "\\n"
+                        val bytes = SerialText.unescape(line)
+                        p.write(dev, bytes.copyOf(minOf(bytes.size, MAX_SERIAL_BYTES)))
                         SerialText.show(p.read(dev, a["timeout_ms"]?.toLongOrNull() ?: 1500)).ifEmpty { "(sent; no reply)" }
                     }
                     else -> "(unknown tool: ${call.name})"
                 }
             } catch (e: Exception) { "(serial error: ${e.message})" }
         }
+    }
+
+    private companion object {
+        /** Cap a single write so a runaway model cannot flood the port. */
+        const val MAX_SERIAL_BYTES = 65_536
     }
 }

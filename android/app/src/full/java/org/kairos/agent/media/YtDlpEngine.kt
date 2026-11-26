@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // KAIROS for Android — Developed by RC. MediaEngine backed by youtubedl-android (yt-dlp + Python +
 // ffmpeg, GPL-3.0). Native binaries are executed from nativeLibraryDir, so jniLibs use legacy packaging.
+// Only compiled into the `full` product flavour.
 package org.kairos.agent.media
 
 import android.content.Context
@@ -27,4 +28,11 @@ class YtDlpEngine(private val context: Context) : MediaEngine {
 
     /** Update yt-dlp itself (sites change often). Network use, user-triggered only. */
     fun update(): String = YoutubeDL.getInstance().updateYoutubeDL(context.applicationContext)?.name ?: "unknown"
+}
+
+/** `full` flavour: media download is available via yt-dlp. */
+object MediaEngines {
+    fun create(context: Context): MediaEngine = YtDlpEngine(context)
+
+    fun update(context: Context): String = YtDlpEngine(context).update()
 }

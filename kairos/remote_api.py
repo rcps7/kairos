@@ -40,6 +40,7 @@ import ipaddress
 import json
 import logging
 import os
+import re
 import secrets as _secrets
 import socket
 import threading
@@ -54,12 +55,15 @@ logger = logging.getLogger(__name__)
 PROTOCOL = 1
 MAX_BODY = 1_000_000
 MAX_SKEW = 120          # seconds
-NONCE_TTL = 300         # seconds a nonce is remembered
+NONCE_TTL = 300         # seconds a nonce (and its cached reply) is remembered
 MAX_FAILURES = 10       # per IP per minute before 429
 MAX_RESULT = 200_000    # characters returned per job result
 MAX_JOBS_KEPT = 50
+MAX_CONNECTIONS = 32    # concurrent handler threads
+SOCKET_TIMEOUT = 30     # seconds a single request may take (anti-slowloris)
 _INFO = b"kairos-remote-v1 aes-256-gcm"
 _SALT = b"kairos-remote"
+_B64URL_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
 # ---------------------------------------------------------------------------
@@ -71,6 +75,20 @@ def b64e(b: bytes) -> str:
 
 def b64d(s: str) -> bytes:
     s = (s or "").strip()
+    return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
+
+
+def b64d_strict(s: str) -> bytes:
+    """Decode canonical, unpadded base64url, rejecting anything else.
+
+    ``urlsafe_b64decode`` silently ignores non-alphabet characters and accepts
+    both the standard and URL-safe alphabets, which would let an attacker change
+    the wire string while it decodes to the same bytes. Rejecting non-canonical
+    input closes that replay/aliasing gap.
+    """
+    s = (s or "").strip()
+    if not _B64URL_RE.match(s):
+        raise ValueError("invalid base64url")
     return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
 
 
@@ -155,8 +173,10 @@ class RemoteServer:
         self.jobs = collections.OrderedDict()
         self._jobs_lock = threading.Lock()
         self._nonces = {}
+        self._replies = {}
         self._nonce_lock = threading.Lock()
         self._failures = collections.defaultdict(collections.deque)
+        self._conns = threading.BoundedSemaphore(MAX_CONNECTIONS)
         self._server = None
         self._thread = None
 
@@ -168,6 +188,7 @@ class RemoteServer:
 
         class Handler(BaseHTTPRequestHandler):
             server_version = "KairosRemote/1"
+            timeout = SOCKET_TIMEOUT
 
             def log_message(self, *a):
                 return
@@ -177,6 +198,7 @@ class RemoteServer:
                 self.send_response(code)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(body)))
+                self.send_header("Connection", "close")
                 self.end_headers()
                 try:
                     self.wfile.write(body)
@@ -184,30 +206,40 @@ class RemoteServer:
                     pass
 
             def do_GET(self):
-                if not client_allowed(self.client_address[0]):
-                    return self._send(403, {"error": "forbidden"})
-                if self.path == "/v1/hello":
-                    # Unauthenticated discovery: only the protocol and key id.
-                    return self._send(200, {"service": "kairos-remote", "v": PROTOCOL, "kid": server.kid})
-                self._send(404, {"error": "not found"})
+                if not server._conns.acquire(blocking=False):
+                    return self._send(503, {"error": "busy"})
+                try:
+                    if not client_allowed(self.client_address[0]):
+                        return self._send(403, {"error": "forbidden"})
+                    if self.path == "/v1/hello":
+                        # Unauthenticated discovery: only the protocol and key id.
+                        return self._send(200, {"service": "kairos-remote", "v": PROTOCOL, "kid": server.kid})
+                    self._send(404, {"error": "not found"})
+                finally:
+                    server._conns.release()
 
             def do_POST(self):
-                ip = self.client_address[0]
-                if not client_allowed(ip):
-                    return self._send(403, {"error": "forbidden"})
-                if self.path != "/v1/rpc":
-                    return self._send(404, {"error": "not found"})
-                if server._rate_limited(ip):
-                    return self._send(429, {"error": "too many failures"})
+                if not server._conns.acquire(blocking=False):
+                    return self._send(503, {"error": "busy"})
                 try:
-                    length = int(self.headers.get("Content-Length") or 0)
-                except ValueError:
-                    length = 0
-                if length <= 0 or length > MAX_BODY:
-                    return self._send(413, {"error": "bad size"})
-                raw = self.rfile.read(length)
-                code, obj = server.handle_raw(raw, ip)
-                self._send(code, obj)
+                    ip = self.client_address[0]
+                    if not client_allowed(ip):
+                        return self._send(403, {"error": "forbidden"})
+                    if self.path != "/v1/rpc":
+                        return self._send(404, {"error": "not found"})
+                    try:
+                        length = int(self.headers.get("Content-Length") or 0)
+                    except ValueError:
+                        length = 0
+                    if length <= 0 or length > MAX_BODY:
+                        return self._send(413, {"error": "bad size"})
+                    raw = self.rfile.read(length)
+                    if server._rate_limited(ip):
+                        return self._send(429, {"error": "too many failures"})
+                    code, obj = server.handle_raw(raw, ip)
+                    self._send(code, obj)
+                finally:
+                    server._conns.release()
 
         self._server = ThreadingHTTPServer((host, port), Handler)
         self._server.daemon_threads = True
@@ -225,6 +257,7 @@ class RemoteServer:
             self._server.shutdown()
             self._server.server_close()
             self._server = None
+        self._thread = None
 
     # -- request handling ------------------------------------------------
     def _rate_limited(self, ip) -> bool:
@@ -232,28 +265,47 @@ class RemoteServer:
         now = self.clock()
         while q and now - q[0] > 60:
             q.popleft()
+        if not q:
+            self._failures.pop(ip, None)
+            return False
         return len(q) >= MAX_FAILURES
 
     def _fail(self, ip, code=401, msg="unauthorized"):
         self._failures[ip].append(self.clock())
         return code, {"error": msg}
 
-    def _fresh_nonce(self, n: str) -> bool:
+    def _claim_nonce(self, nonce: bytes):
+        """Return ``(is_new, cached_reply)``.
+
+        Nonces are keyed on the **raw bytes** (hex), not the base64 text, so an
+        attacker cannot alias the wire string to bypass replay defence. A seen
+        nonce returns the cached sealed reply while it is still fresh, so a
+        client that retries after a lost response gets the same answer.
+        """
+        key = nonce.hex()
         now = self.clock()
         with self._nonce_lock:
             for k in [k for k, t in self._nonces.items() if now - t > NONCE_TTL]:
                 del self._nonces[k]
-            if n in self._nonces:
-                return False
-            self._nonces[n] = now
-            return True
+            for k in [k for k, (t, _c, _o) in self._replies.items() if now - t > NONCE_TTL]:
+                del self._replies[k]
+            if key in self._nonces:
+                cached = self._replies.get(key)
+                return False, (cached[1], cached[2]) if cached else None
+            self._nonces[key] = now
+            return True, None
+
+    def _remember_reply(self, nonce: bytes, code, obj):
+        with self._nonce_lock:
+            self._replies[nonce.hex()] = (self.clock(), code, obj)
 
     def handle_raw(self, raw: bytes, ip: str = "127.0.0.1"):
         try:
             env = json.loads(raw.decode("utf-8"))
             ts = int(env["ts"])
-            n = str(env["n"])
-            nonce, ct = b64d(n), b64d(env["c"])
+            n = str(env.get("n") or "")
+            nonce = b64d_strict(n)
+            ct = b64d_strict(str(env.get("c") or ""))
         except Exception:
             return self._fail(ip, 400, "bad request")
         if env.get("v") != PROTOCOL or env.get("kid") != self.kid or len(nonce) != 12:
@@ -264,14 +316,20 @@ class RemoteServer:
             req = json.loads(open_sealed(self.key, nonce, ct, req_aad(ts)).decode("utf-8"))
         except Exception:
             return self._fail(ip)
-        if not self._fresh_nonce(n):
+        fresh, cached = self._claim_nonce(nonce)
+        if not fresh:
+            if cached is not None:
+                return cached
             return self._fail(ip, 401, "replayed request")
         try:
             result = {"ok": True, "result": self.dispatch(req.get("op"), req.get("args") or {})}
         except Exception as e:  # noqa: BLE001 - reported to the paired client only
+            logger.warning("remote op %r failed: %s", req.get("op"), e)
             result = {"ok": False, "error": str(e)[:500]}
         rn, rc = seal(self.key, json.dumps(result).encode("utf-8"), resp_aad(n))
-        return 200, {"v": PROTOCOL, "n": b64e(rn), "c": b64e(rc)}
+        code, obj = 200, {"v": PROTOCOL, "n": b64e(rn), "c": b64e(rc)}
+        self._remember_reply(nonce, code, obj)
+        return code, obj
 
     # -- operations ------------------------------------------------------
     def dispatch(self, op, args: dict):
@@ -382,6 +440,13 @@ def pair(cfg: dict, save) -> str:
     secret = new_secret()
     remote["secret"] = secret
     save(cfg)
+    try:
+        from kairos.config import _keyring_get
+        if _keyring_get("remote_secret") != secret:
+            logger.warning("The pairing secret could not be stored in the OS keyring; "
+                           "it will be lost on restart. Set it manually before pairing.")
+    except Exception:
+        pass
     host = remote.get("host") or "0.0.0.0"
     if host in ("0.0.0.0", "::", ""):
         host = lan_address()
@@ -414,7 +479,7 @@ def _main(argv=None):
     sub.add_parser("pair", help="create a new pairing link/QR (revokes the old phone)")
     t = sub.add_parser("serve-test", help="serve with an echo engine (for app tests)")
     t.add_argument("--port", type=int, default=8766)
-    t.add_argument("--host", default="0.0.0.0")
+    t.add_argument("--host", default="127.0.0.1")
     t.add_argument("--secret", required=True)
     a = p.parse_args(argv)
     if a.cmd == "pair":

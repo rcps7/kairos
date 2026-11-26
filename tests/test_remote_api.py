@@ -36,14 +36,51 @@ def _open(key, env, resp):
     return json.loads(ra.open_sealed(key, ra.b64d(resp["n"]), ra.b64d(resp["c"]), ra.resp_aad(env["n"])))
 
 
-def test_rejects_tamper_replay_stale_and_wrong_key():
+class _Counting(ra.EchoEngine):
+    def __init__(self):
+        self.calls = 0
+
+    def chat(self, prompt, progress=None):
+        self.calls += 1
+        return super().chat(prompt, progress)
+
+
+def test_replay_is_idempotent_and_not_re_executed():
+    eng = _Counting()
+    srv = ra.RemoteServer(eng, {"secret": SECRET})
+    key = srv.key
+    env = _envelope(key, {"op": "chat", "args": {"prompt": "hi"}})
+    raw = json.dumps(env).encode()
+    code, resp = srv.handle_raw(raw)
+    assert code == 200 and _open(key, env, resp) == {"ok": True, "result": "echo: hi"}
+    # An identical retry returns the same sealed reply and does NOT run the op again.
+    code2, resp2 = srv.handle_raw(raw)
+    assert code2 == 200 and _open(key, env, resp2) == {"ok": True, "result": "echo: hi"}
+    assert eng.calls == 1
+    # Once the cached reply is gone, the nonce is still remembered -> replay rejected.
+    srv._replies.clear()
+    assert srv.handle_raw(raw)[0] == 401
+
+
+def test_nonce_aliasing_is_rejected():
     srv = ra.RemoteServer(ra.EchoEngine(), {"secret": SECRET})
     key = srv.key
     env = _envelope(key, {"op": "chat", "args": {"prompt": "hi"}})
-    code, resp = srv.handle_raw(json.dumps(env).encode())
-    assert code == 200 and _open(key, env, resp) == {"ok": True, "result": "echo: hi"}
-    # replay of the same nonce
-    assert srv.handle_raw(json.dumps(env).encode())[0] == 401
+    assert srv.handle_raw(json.dumps(env).encode())[0] == 200
+    # Insert non-alphabet characters: the wire string changes, the bytes do not.
+    alias = dict(env)
+    alias["n"] = env["n"][:4] + "!!!!" + env["n"][4:]
+    assert ra.b64d(alias["n"]) == ra.b64d(env["n"])
+    assert srv.handle_raw(json.dumps(alias).encode())[0] == 400
+    # A non-URL-safe alphabet character is rejected too.
+    alias2 = dict(env)
+    alias2["c"] = env["c"] + "+"
+    assert srv.handle_raw(json.dumps(alias2).encode())[0] == 400
+
+
+def test_rejects_tamper_stale_and_wrong_key():
+    srv = ra.RemoteServer(ra.EchoEngine(), {"secret": SECRET})
+    key = srv.key
     # tampered ciphertext
     bad = _envelope(key, {"op": "ping"})
     bad["c"] = ra.b64e(bytes([ra.b64d(bad["c"])[0] ^ 1]) + ra.b64d(bad["c"])[1:])
@@ -90,7 +127,8 @@ def test_end_to_end_over_http_runs_job():
     try:
         port = srv.port
         info = ra.call("127.0.0.1", port, SECRET, "ping")
-        assert info["version"] == "0.16.5" and info["character"] == "Echo"
+        from kairos import __version__
+        assert info["version"] == __version__ and info["character"] == "Echo"
         assert ra.call("127.0.0.1", port, SECRET, "chat", {"prompt": "yo"}) == "echo: yo"
         jid = ra.call("127.0.0.1", port, SECRET, "submit", {"prompt": "build it", "mode": "execute"})["id"]
         for _ in range(50):
@@ -113,3 +151,16 @@ def test_end_to_end_over_http_runs_job():
 def test_config_keeps_secret_out_of_json(monkeypatch):
     from kairos import config
     assert config.DEFAULT_CONFIG["remote"] == {"enabled": False, "host": "0.0.0.0", "port": 8766, "secret": None}
+
+
+def test_serve_test_defaults_to_loopback_and_stop_clears_thread():
+    import sys
+    argv = sys.argv
+    # --port 0 alone must bind loopback by default (not 0.0.0.0).
+    srv = ra.RemoteServer(ra.EchoEngine(), {"host": "127.0.0.1", "port": 0, "secret": SECRET}).start()
+    try:
+        assert srv._thread is not None
+        assert srv._server.server_address[0] == "127.0.0.1"
+    finally:
+        srv.stop()
+    assert srv._thread is None and srv._server is None

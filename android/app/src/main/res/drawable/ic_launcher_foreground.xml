@@ -1,0 +1,20 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Stylised "K" mark in the KAIROS fluorescent green, with a cyan node. -->
+    <path
+        android:strokeColor="#00E676"
+        android:strokeWidth="7"
+        android:strokeLineCap="round"
+        android:pathData="M42,37 L42,71" />
+    <path
+        android:strokeColor="#00E676"
+        android:strokeWidth="7"
+        android:strokeLineCap="round"
+        android:pathData="M65,37 L47,54 L65,71" />
+    <path
+        android:fillColor="#4DD0E1"
+        android:pathData="M71,33 m-5,0 a5,5 0 1,0 10,0 a5,5 0 1,0 -10,0" />
+</vector>

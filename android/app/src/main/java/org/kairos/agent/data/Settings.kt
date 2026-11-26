@@ -80,6 +80,12 @@ class Settings(context: Context) {
         get() = p.getString("git_active_repo", "")!!
         set(v) = p.edit().putString("git_active_repo", v.trim()).apply()
 
+    // ---- Serial (USB OTG): the agent may only transmit when explicitly allowed ----
+    /** Off by default: page/agent content must not silently drive a connected board. */
+    var serialWriteAllowed: Boolean
+        get() = p.getBoolean("serial_write_allowed", false)
+        set(v) = p.edit().putBoolean("serial_write_allowed", v).apply()
+
     // ---- Voice ----
     /** "auto" (system recognizer, Vosk if none), "system" or "vosk". */
     var voiceEngine: String

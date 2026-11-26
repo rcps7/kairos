@@ -1,6 +1,10 @@
 <resources>
-    <style name="Theme.Kairos" parent="android:Theme.Material.NoActionBar">
-        <item name="android:windowBackground">#FF101010</item>
-        <item name="android:statusBarColor">#FF101010</item>
+    <!-- Light (default). The Compose theme follows the system dark setting; this keeps the
+         launch window background consistent so there is no white flash. -->
+    <style name="Theme.Kairos" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">#FFF7F9FB</item>
+        <item name="android:statusBarColor">#FFF7F9FB</item>
+        <item name="android:navigationBarColor">#FFF7F9FB</item>
+        <item name="android:windowLightStatusBar">true</item>
     </style>
 </resources>

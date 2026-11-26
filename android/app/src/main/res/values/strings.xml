@@ -1,1 +1,4 @@
-<resources><string name="app_name">KAIROS</string></resources>
+<resources>
+    <string name="app_name">KAIROS</string>
+    <string name="app_short_description">Self-evolving AI agent: chat, web, code, git, PC remote and devices.</string>
+</resources>

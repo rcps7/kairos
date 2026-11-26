@@ -17,20 +17,62 @@ fun interface ChatBackend {
     suspend fun complete(messages: List<ChatMessage>, onDelta: ((String) -> Unit)?): String
 }
 
-const val ADVANCED_PROTOCOL = "ADVANCED TOOLS\nYou may also request these host tools with " +
-    "<tool name=\"NAME\">{JSON arguments}</tool>:\n" +
-    "  - plan_create(goal, steps)\n  - plan_add_step(plan_id, title)\n" +
-    "  - plan_update_step(step_id, status, result)\n  - plan_status(plan_id)\n" +
-    "  - read_email(limit)\n  - send_email(to, subject, body)\n" +
-    "  - list_skills()\n  - run_skill(name, args)\n" +
-    "  - git_status(repo)\n  - git_diff(staged, ref)\n  - git_log(n)\n  - git_branches()\n" +
-    "  - git_commit(message)\n  - git_branch(name)\n  - git_checkout(name)\n  - git_pull()\n  - git_push(remote, branch)\n  - download_media(url, format)  # format mp3 (audio) or mp4 (video)\n" +
-    "  - browser_goto(url)\n  - browser_read(selector)\n  - browser_inputs()\n  - browser_fill(target, value)  # target = label, name or CSS selector\n" +
-    "  - browser_form(fields)  # JSON object label -> value\n  - browser_click(target)  # selector or visible text\n" +
-    "  - browser_key(key, target)\n  - browser_mouse(x, y)\n  - browser_js(code)\n  - browser_action(steps)  # JSON list of {op: goto|click|fill|key|drag|scroll|wait|read|screenshot}\n" +
-    "  - browser_back()\n  - browser_screenshot()\n  - browser_captcha()  # detect only; the user solves CAPTCHAs\n" +
-    "  - serial_list()\n  - serial_open(device, baud)\n  - serial_write(device, data)  # supports \\n and \\xNN\n" +
-    "  - serial_read(device, timeout_ms)\n  - serial_send(device, data, baud)  # write a line and return the reply\n  - serial_close(device)"
+/**
+ * Advanced `<tool name="...">` protocol, filtered to the active character's
+ * capabilities so the model is never told about tools it may not use. `caps`
+ * null means every capability is allowed (desktop semantics).
+ */
+fun advancedProtocol(caps: List<String>?): String {
+    fun ok(cap: String) = caps == null || cap in caps
+    val lines = mutableListOf<String>()
+    lines += "  - plan_create(goal, steps)"
+    lines += "  - plan_add_step(plan_id, title)"
+    lines += "  - plan_update_step(step_id, status, result)"
+    lines += "  - plan_status(plan_id)"
+    if (ok("email_read")) lines += "  - read_email(limit)"
+    if (ok("email_send")) lines += "  - send_email(to, subject, body)"
+    if (ok("skills_run")) {
+        lines += "  - list_skills()"
+        lines += "  - run_skill(name, args)"
+    }
+    if (ok("git_ops")) {
+        lines += "  - git_status(repo)"
+        lines += "  - git_diff(staged, ref)"
+        lines += "  - git_log(n)"
+        lines += "  - git_branches()"
+        lines += "  - git_commit(message)"
+        lines += "  - git_branch(name)"
+        lines += "  - git_checkout(name)"
+        lines += "  - git_pull()"
+        lines += "  - git_push(remote, branch)"
+    }
+    if (ok("download_media")) lines += "  - download_media(url, format)  # format mp3 (audio) or mp4 (video)"
+    if (ok("browser_control")) {
+        lines += "  - browser_goto(url)"
+        lines += "  - browser_read(selector)"
+        lines += "  - browser_inputs()"
+        lines += "  - browser_fill(target, value)  # target = label, name or CSS selector"
+        lines += "  - browser_form(fields)  # JSON object label -> value"
+        lines += "  - browser_click(target)  # selector or visible text"
+        lines += "  - browser_key(key, target)"
+        lines += "  - browser_mouse(x, y)"
+        lines += "  - browser_js(code)"
+        lines += "  - browser_action(steps)  # JSON list of {op: goto|click|fill|key|drag|scroll|wait|read|screenshot}"
+        lines += "  - browser_back()"
+        lines += "  - browser_screenshot()"
+        lines += "  - browser_captcha()  # detect only; the user solves CAPTCHAs"
+    }
+    if (ok("peripherals")) {
+        lines += "  - serial_list()"
+        lines += "  - serial_open(device, baud)"
+        lines += "  - serial_write(device, data)  # supports \\n and \\xNN; needs 'Allow agent serial writes'"
+        lines += "  - serial_read(device, timeout_ms)"
+        lines += "  - serial_send(device, data, baud)  # write a line and return the reply"
+        lines += "  - serial_close(device)"
+    }
+    return "ADVANCED TOOLS\nYou may also request these host tools with " +
+        "<tool name=\"NAME\">{JSON arguments}</tool>:\n" + lines.joinToString("\n")
+}
 
 class Engine(
     private val characters: CharacterRegistry,
@@ -82,7 +124,7 @@ class Engine(
      * Desktop _tool_loop(full_tools=True) also advertises the advanced <tool name> protocol.
      */
     suspend fun runTurn(userText: String): String {
-        val sys = systemPrompt(userText) + "\n\n" + ADVANCED_PROTOCOL
+        val sys = systemPrompt(userText) + "\n\n" + advancedProtocol(characters.active().capabilities)
         val messages = listOf(ChatMessage("system", sys), ChatMessage("user", userText))
         val reply = backend.complete(messages, null)
         val (clean, calls) = Tools.parse(reply)

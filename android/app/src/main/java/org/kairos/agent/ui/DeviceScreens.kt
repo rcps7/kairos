@@ -29,6 +29,7 @@ fun BrowserScreen(app: KairosApp) {
     val current by app.browserPage.urlFlow.collectAsState()
     var address by remember(current) { mutableStateOf(if (current == "about:blank") "" else current) }
     var note by remember { mutableStateOf("") }
+    val canUseAgent = app.characters.can("browser_control")
     Column(Modifier.fillMaxSize().testTag("browser")) {
         Row(Modifier.fillMaxWidth().padding(6.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
             OutlinedTextField(address, { address = it }, Modifier.weight(1f).testTag("browser_url"), singleLine = true,
@@ -39,12 +40,12 @@ fun BrowserScreen(app: KairosApp) {
             }, modifier = Modifier.testTag("browser_go")) { Text("Go") }
         }
         Row(Modifier.padding(horizontal = 6.dp)) {
-            TextButton(onClick = { scope.launch { app.browserPage.back() } }) { Text("◀ Back") }
-            TextButton(onClick = { scope.launch { app.browserPage.forward() } }) { Text("Forward ▶") }
+            TextButton(onClick = { scope.launch { app.browserPage.back() } }) { Text("\u25C0 Back") }
+            TextButton(onClick = { scope.launch { app.browserPage.forward() } }) { Text("Forward \u25B6") }
             TextButton(onClick = { scope.launch { app.browserPage.reload() } }) { Text("Reload") }
             TextButton(onClick = { scope.launch { note = app.browserAgent.captcha() } }) { Text("CAPTCHA?") }
         }
-        if (!app.characters.can("browser_control"))
+        if (!canUseAgent)
             Text("The active character can't use browser automation; you can still browse here.", Modifier.padding(6.dp))
         if (note.isNotEmpty()) Text(note, Modifier.padding(6.dp).testTag("browser_note"))
         AndroidView(factory = { _ ->
@@ -62,19 +63,28 @@ fun SerialScreen(app: KairosApp) {
     var selected by remember { mutableStateOf<String?>(null) }
     var baud by remember { mutableStateOf("115200") }
     var line by remember { mutableStateOf("") }
+    var newline by remember { mutableStateOf(true) }
     var log by remember { mutableStateOf("") }
-    var connected by remember { mutableStateOf(false) }
+    // The open port is tracked by id, so changing the selection never leaves a stale port open.
+    var connectedId by remember { mutableStateOf<String?>(null) }
     var status by remember { mutableStateOf("") }
+    var allowWrite by remember { mutableStateOf(app.settings.serialWriteAllowed) }
     val allowed = app.characters.can("peripherals")
+    val connected = connectedId != null && connectedId == selected
 
-    fun refresh() { ports = runCatching { app.serialPorts.list() }.getOrDefault(emptyList()); if (selected !in ports.map { it.id }) selected = ports.firstOrNull()?.id }
+    fun refresh() {
+        ports = runCatching { app.serialPorts.list() }.getOrDefault(emptyList())
+        if (selected !in ports.map { it.id }) selected = ports.firstOrNull()?.id
+    }
     LaunchedEffect(Unit) { refresh() }
-    LaunchedEffect(connected, selected) {
-        val id = selected ?: return@LaunchedEffect
-        while (connected && isActive) {
-            val b = withContext(Dispatchers.IO) { runCatching { app.serialPorts.read(id, 300) }.getOrDefault(ByteArray(0)) }
+    // Live read from the connected port only, paused while an agent job uses it.
+    LaunchedEffect(connectedId) {
+        val id = connectedId ?: return@LaunchedEffect
+        while (isActive) {
+            if (app.jobs.isBusy()) { delay(120); continue }
+            val b = withContext(Dispatchers.IO) { runCatching { app.serialPorts.read(id, 250) }.getOrDefault(ByteArray(0)) }
             if (b.isNotEmpty()) log = (log + SerialText.show(b)).takeLast(20_000)
-            delay(50)
+            delay(60)
         }
     }
     LazyColumn(Modifier.fillMaxSize().padding(12.dp).testTag("serial")) {
@@ -82,13 +92,21 @@ fun SerialScreen(app: KairosApp) {
             Text("USB serial (OTG)", style = MaterialTheme.typography.titleMedium)
             Text("Plug an ESP32, Arduino or Pico into the phone with a USB OTG adapter. Supported chips: CDC-ACM, CP210x, CH34x, FTDI.")
             if (!allowed) Text("The active character is not permitted to use serial peripherals.")
+            Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                Switch(checked = allowWrite, onCheckedChange = { allowWrite = it; app.settings.serialWriteAllowed = it },
+                    modifier = Modifier.testTag("serial_allow_write"))
+                Spacer(Modifier.width(8.dp))
+                Text("Allow agent serial writes")
+            }
+            Text("Off by default: an agent (or a web page) must not silently drive a connected board.",
+                style = MaterialTheme.typography.bodySmall)
             Row { OutlinedButton(onClick = { refresh() }, modifier = Modifier.testTag("serial_refresh")) { Text("Refresh") } }
             if (ports.isEmpty()) Text("No USB serial devices found.", Modifier.testTag("serial_none"))
         }
         items(ports, key = { it.id }) { p ->
             Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                 RadioButton(selected = selected == p.id, onClick = { selected = p.id })
-                Text("${p.description} · ${p.chip?.label}" + if (p.permitted) "" else " · needs permission")
+                Text("${p.description} \u00B7 ${p.chip?.label}" + if (p.permitted) "" else " \u00B7 needs permission")
             }
         }
         item {
@@ -97,21 +115,32 @@ fun SerialScreen(app: KairosApp) {
                 Spacer(Modifier.width(8.dp))
                 Button(enabled = allowed && selected != null, onClick = click@{
                     val id = selected ?: return@click
-                    if (connected) { app.serialPorts.close(id); connected = false; status = "Disconnected."; return@click }
+                    if (connected) {
+                        scope.launch { withContext(Dispatchers.IO) { runCatching { app.serialPorts.close(id) } }; connectedId = null; status = "Disconnected." }
+                        return@click
+                    }
                     scope.launch {
                         val r = withContext(Dispatchers.IO) { runCatching { app.serialPorts.open(id, baud.toIntOrNull() ?: 115200) }.getOrElse { "Error: ${it.message}" } }
-                        status = r; connected = r.startsWith("Opened") || r.startsWith("Port"); refresh()
+                        status = r
+                        if (r.startsWith("Opened") || r.startsWith("Port")) connectedId = id
+                        refresh()
                     }
-                }) { Text(if (connected) "Disconnect" else "Connect") }
+                }, modifier = Modifier.testTag("serial_connect")) { Text(if (connected) "Disconnect" else "Connect") }
             }
             if (status.isNotEmpty()) Text(status, Modifier.testTag("serial_status"))
             Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                 OutlinedTextField(line, { line = it }, Modifier.weight(1f), label = { Text("Send (\\n, \\xNN escapes)") }, singleLine = true)
                 Spacer(Modifier.width(6.dp))
+                Checkbox(checked = newline, onCheckedChange = { newline = it })
+                Text("\\n")
                 Button(enabled = connected, onClick = click@{
-                    val id = selected ?: return@click; val data = SerialText.unescape(line + "\\n"); line = ""
+                    val id = selected ?: return@click
+                    val data = SerialText.unescape(if (newline) line + "\\n" else line); line = ""
                     scope.launch { withContext(Dispatchers.IO) { runCatching { app.serialPorts.write(id, data) } } }
                 }) { Text("Send") }
+            }
+            Row {
+                OutlinedButton(onClick = { log = "" }) { Text("Clear log") }
             }
             SelectionContainer { Text(log.ifEmpty { "(no data yet)" }, Modifier.padding(top = 8.dp).testTag("serial_log"),
                 fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace) }

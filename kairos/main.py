@@ -1828,6 +1828,11 @@ class KairosEngine:
         except Exception:
             pass
         try:
+            if self.remote:
+                self.remote.stop()
+        except Exception:
+            pass
+        try:
             from kairos import browser as _browser
             _browser.session_close()
         except Exception:
@@ -1896,11 +1901,13 @@ def fallback_models(provider_id: str, provider: dict = None) -> list:
     provider = provider or {}
     models = list(_FALLBACK_MODELS.get(provider_id, []))
     url = (provider.get("api_url") or "").lower()
-    for preset in LLM_PRESETS:
-        if preset["api_url"].lower() in url or url in preset["api_url"].lower():
-            for m in _FALLBACK_MODELS.get(preset["id"], []):
-                if m not in models:
-                    models.append(m)
+    if url:
+        for preset in LLM_PRESETS:
+            purl = preset["api_url"].lower()
+            if purl in url or url in purl:
+                for m in _FALLBACK_MODELS.get(preset["id"], []):
+                    if m not in models:
+                        models.append(m)
     cur = provider.get("model")
     if cur and cur not in models:
         models.insert(0, cur)

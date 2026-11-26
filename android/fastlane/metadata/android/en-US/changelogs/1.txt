@@ -1,0 +1,3 @@
+First Android release: chat, web tools, characters, memory, plans, git, email, Telegram,
+skills (sandboxed JavaScript), PC remote control, Browser Agent (WebView), USB OTG serial,
+and voice. Media downloads (yt-dlp) are in the separate "full" build.

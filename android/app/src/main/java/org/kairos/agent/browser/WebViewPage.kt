@@ -7,7 +7,10 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.view.View
+import android.webkit.RenderProcessGoneDetail
+import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
+import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import kotlinx.coroutines.CompletableDeferred
@@ -36,15 +39,24 @@ class WebViewPage(private val context: Context) : BrowserPage {
 
     /** The WebView (main thread only). */
     @SuppressLint("SetJavaScriptEnabled")
+    @Suppress("DEPRECATION")
     fun view(): WebView = web ?: WebView(context).also { w ->
-        w.settings.javaScriptEnabled = true
-        w.settings.domStorageEnabled = true
-        w.settings.allowFileAccess = false
-        w.settings.allowContentAccess = false
+        val st = w.settings
+        st.javaScriptEnabled = true
+        st.domStorageEnabled = true
+        st.allowFileAccess = false
+        st.allowContentAccess = false
+        st.allowFileAccessFromFileURLs = false
+        st.allowUniversalAccessFromFileURLs = false
+        st.javaScriptCanOpenWindowsAutomatically = false
+        st.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+        st.setSavePassword(false)
+        WebView.setWebContentsDebuggingEnabled(false)
         w.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, req: WebResourceRequest): Boolean {
                 val s = req.url.scheme?.lowercase()
-                return !(s == "http" || s == "https" || s == "about" || s == "data")
+                // Only http/https and internal about: pages may navigate in-app.
+                return !(s == "http" || s == "https" || s == "about")
             }
             override fun onPageStarted(view: WebView, u: String, favicon: Bitmap?) {
                 loading = true; lastStart = System.currentTimeMillis()
@@ -54,15 +66,35 @@ class WebViewPage(private val context: Context) : BrowserPage {
             override fun onPageFinished(view: WebView, u: String) {
                 loading = false; url = u; title = view.title.orEmpty(); _state.value = u; done.complete(Unit)
             }
+            override fun onReceivedError(view: WebView, req: WebResourceRequest, err: WebResourceError) {
+                // Release anyone waiting on the load so callers do not hang on a dead page.
+                if (req.isForMainFrame) { loading = false; if (!done.isCompleted) done.complete(Unit) }
+            }
+            override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+                // The renderer died; drop the dead WebView and unblock waiters.
+                web = null; loading = false
+                if (!done.isCompleted) done.complete(Unit)
+                return true
+            }
         }
         if (w.width == 0) { w.measure(View.MeasureSpec.makeMeasureSpec(1080, View.MeasureSpec.EXACTLY),
             View.MeasureSpec.makeMeasureSpec(1920, View.MeasureSpec.EXACTLY)); w.layout(0, 0, 1080, 1920) }
         web = w
     }
 
+    /** Defense-in-depth: the WebView only ever loads http(s) or about:blank. */
+    private fun requireHttp(url: String): String {
+        val u = url.trim()
+        if (u == "about:blank") return u
+        val s = u.substringBefore(':').lowercase()
+        require(s == "http" || s == "https") { "Only http(s) pages can be opened (got '$s:')." }
+        return u
+    }
+
     override suspend fun load(url: String) {
+        val safe = requireHttp(url)
         withContext(Dispatchers.Main) {
-            val w = view(); done = CompletableDeferred(); loading = true; lastStart = System.currentTimeMillis(); w.loadUrl(url)
+            val w = view(); done = CompletableDeferred(); loading = true; lastStart = System.currentTimeMillis(); w.loadUrl(safe)
         }
         waitDone(30_000)
     }

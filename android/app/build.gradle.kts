@@ -18,6 +18,25 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    /**
+     * Two distributions:
+     *  - `fdroid`: no prebuilt native binaries (media download via yt-dlp is excluded) so the APK can
+     *    be built by the mainline F-Droid repository.
+     *  - `full`: adds youtubedl-android (yt-dlp + ffmpeg) for on-device media download; distributed via
+     *    IzzyOnDroid / GitHub Releases.
+     */
+    flavorDimensions += "distribution"
+    productFlavors {
+        create("fdroid") {
+            dimension = "distribution"
+            isDefault = true
+            versionNameSuffix = "-fdroid"
+        }
+        create("full") {
+            dimension = "distribution"
+        }
+    }
+
     // Release signing comes from environment variables (CI secrets) only.
     // No keystore or password is ever committed to the repository.
     signingConfigs {
@@ -81,9 +100,10 @@ dependencies {
     implementation("org.mozilla:rhino:1.7.15")
     // JGit for git workflows: EDL-1.0 (BSD-3-Clause). 5.13 is the last line targeting Java 8 APIs.
     implementation("org.eclipse.jgit:org.eclipse.jgit:5.13.3.202401111512-r")
-    // yt-dlp + Python + ffmpeg for media downloads: GPL-3.0 (approved by the owner)
-    implementation("io.github.junkfood02.youtubedl-android:library:0.18.1")
-    implementation("io.github.junkfood02.youtubedl-android:ffmpeg:0.18.1")
+    // yt-dlp + Python + ffmpeg for media downloads: GPL-3.0. Only the `full` flavour ships these
+    // prebuilt native binaries; the `fdroid` flavour excludes them for mainline F-Droid compliance.
+    "fullImplementation"("io.github.junkfood02.youtubedl-android:library:0.18.1")
+    "fullImplementation"("io.github.junkfood02.youtubedl-android:ffmpeg:0.18.1")
     // Vosk offline speech recognition: Apache-2.0 (approved by the owner); pulls JNA (LGPL-2.1/Apache-2.0)
     implementation("com.alphacephei:vosk-android:0.3.75")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")

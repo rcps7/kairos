@@ -15,8 +15,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.AndroidViewModel
@@ -25,13 +25,6 @@ import kotlinx.coroutines.launch
 import org.kairos.agent.KairosApp
 import org.kairos.agent.data.SecureStore
 import org.kairos.agent.llm.Providers
-
-// Desktop theme: dark with fluorescent-green text.
-private val KairosGreen = Color(0xFF39FF14)
-private val KairosColors = darkColorScheme(
-    primary = KairosGreen, onPrimary = Color.Black, background = Color(0xFF101010),
-    surface = Color(0xFF181818), onBackground = KairosGreen, onSurface = KairosGreen,
-)
 
 data class UiMsg(val role: String, val text: String)
 
@@ -96,7 +89,7 @@ class MainActivity : ComponentActivity() {
     private val vm: MainViewModel by viewModels()
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent { MaterialTheme(colorScheme = KairosColors) { KairosRoot(vm, application as KairosApp) } }
+        setContent { KairosTheme { KairosRoot(vm, application as KairosApp) } }
     }
 }
 
@@ -104,44 +97,76 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun KairosRoot(vm: MainViewModel, app: KairosApp) {
     var tab by remember { mutableIntStateOf(0) }
-    val tabs = listOf("Chat", "Provider", "Characters", "Memory", "Library", "Plans")
+    val primary = listOf("Chat", "Provider", "Characters", "Memory", "Library", "Plans")
+    val glyphs = listOf("\uD83D\uDCAC", "\u2699", "\uD83C\uDFAD", "\uD83E\uDDE0", "\uD83D\uDCDA", "\uD83D\uDDD2")
+    val secondary = listOf(6 to "Connect", 7 to "Skills", 8 to "Git", 9 to "Media", 10 to "PC", 11 to "Browser", 12 to "Serial")
+    val secondaryLabel = mapOf("Connect" to "Email & Telegram", "Media" to "Media & Voice",
+        "PC" to "PC remote", "Serial" to "USB serial")
     Scaffold(
         topBar = {
             var more by remember { mutableStateOf(false) }
-            TopAppBar(title = { Text("KAIROS") }, actions = {
-                TextButton(onClick = { more = true }, modifier = Modifier.testTag("more")) { Text("More ▾") }
-                DropdownMenu(expanded = more, onDismissRequest = { more = false }) {
-                    listOf(10 to "PC", 11 to "Browser", 12 to "Serial", 7 to "Skills", 6 to "Connect", 8 to "Git", 9 to "Media").forEach { (i, t) ->
-                        DropdownMenuItem(text = { Text(when (t) { "Connect" -> "Email & Telegram"; "Media" -> "Media & Voice"; "PC" -> "PC remote"; "Serial" -> "USB serial"; else -> t }) },
-                            onClick = { tab = i; more = false }, modifier = Modifier.testTag("tab_$t"))
+            TopAppBar(
+                title = {
+                    Column {
+                        Text("KAIROS", fontWeight = FontWeight.Bold)
+                        Text("${app.characters.active().name} \u00B7 ${app.settings.activeProvider}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary)
                     }
-                }
-            })
+                },
+                actions = {
+                    TextButton(onClick = { more = true }, modifier = Modifier.testTag("more")) { Text("More \u25BE") }
+                    DropdownMenu(expanded = more, onDismissRequest = { more = false }) {
+                        secondary.forEach { (i, t) ->
+                            DropdownMenuItem(
+                                text = { Text(secondaryLabel[t] ?: t) },
+                                onClick = { tab = i; more = false },
+                                modifier = Modifier.testTag("tab_$t"))
+                        }
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface),
+            )
         },
         bottomBar = {
-            NavigationBar {
-                tabs.forEachIndexed { i, t ->
-                    NavigationBarItem(selected = tab == i, onClick = { tab = i },
-                        icon = { Text(t.take(1)) }, label = { Text(t) }, modifier = Modifier.testTag("tab_$t"))
+            NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
+                primary.forEachIndexed { i, t ->
+                    NavigationBarItem(
+                        selected = tab == i,
+                        onClick = { tab = i },
+                        icon = { Text(glyphs[i]) },
+                        label = { Text(t) },
+                        modifier = Modifier.testTag("tab_$t"))
                 }
             }
         },
     ) { pad ->
-        Box(Modifier.padding(pad).fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-            when (tab) {
-                0 -> ChatScreen(vm)
-                1 -> ProviderScreen(vm, app)
-                2 -> CharacterScreen(app)
-                3 -> MemoryScreen(app)
-                4 -> LibraryScreen(app)
-                5 -> PlansScreen(app)
-                6 -> ConnectScreen(app)
-                7 -> SkillsScreen(app)
-                8 -> GitScreen(app)
-                9 -> MediaScreen(app)
-                10 -> PcScreen(app)
-                11 -> BrowserScreen(app)
-                else -> SerialScreen(app)
+        Column(Modifier.padding(pad).fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+            if (tab >= primary.size) {
+                val name = secondary.firstOrNull { it.first == tab }?.second ?: "KAIROS"
+                Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                    Text(secondaryLabel[name] ?: name, style = MaterialTheme.typography.titleMedium)
+                    Spacer(Modifier.weight(1f))
+                    TextButton(onClick = { tab = 0 }, modifier = Modifier.testTag("home")) { Text("Home") }
+                }
+            }
+            Box(Modifier.weight(1f).fillMaxWidth()) {
+                when (tab) {
+                    0 -> ChatScreen(vm)
+                    1 -> ProviderScreen(vm, app)
+                    2 -> CharacterScreen(app)
+                    3 -> MemoryScreen(app)
+                    4 -> LibraryScreen(app)
+                    5 -> PlansScreen(app)
+                    6 -> ConnectScreen(app)
+                    7 -> SkillsScreen(app)
+                    8 -> GitScreen(app)
+                    9 -> MediaScreen(app)
+                    10 -> PcScreen(app)
+                    11 -> BrowserScreen(app)
+                    else -> SerialScreen(app)
+                }
             }
         }
     }
@@ -196,8 +221,18 @@ fun ChatScreen(vm: MainViewModel) {
                 Row(Modifier.fillMaxWidth().padding(4.dp),
                     horizontalArrangement = if (mine) Arrangement.End else Arrangement.Start) {
                     Surface(shape = RoundedCornerShape(12.dp),
-                        color = when (m.role) { "user" -> Color(0xFF263826); "error" -> Color(0xFF402020); else -> Color(0xFF202020) }) {
-                        Text(m.text.ifEmpty { "…" }, Modifier.padding(10.dp))
+                        color = when (m.role) {
+                            "user" -> MaterialTheme.colorScheme.primaryContainer
+                            "error" -> MaterialTheme.colorScheme.errorContainer
+                            else -> MaterialTheme.colorScheme.surfaceVariant
+                        },
+                        tonalElevation = 2.dp) {
+                        Text(m.text.ifEmpty { "\u2026" }, Modifier.padding(10.dp),
+                            color = when (m.role) {
+                                "user" -> MaterialTheme.colorScheme.onPrimaryContainer
+                                "error" -> MaterialTheme.colorScheme.onErrorContainer
+                                else -> MaterialTheme.colorScheme.onSurfaceVariant
+                            })
                     }
                 }
             }
@@ -470,7 +505,7 @@ fun ConnectScreen(app: KairosApp) {
             }
             Text("Status: $tgStatus", Modifier.testTag("tg_status"))
             if (token.isNotBlank() && !org.kairos.agent.telegram.validateTokenFormat(token))
-                Text("Token format looks wrong (expected '<digits>:<secret>').", color = Color(0xFFFF6060))
+                Text("Token format looks wrong (expected '<digits>:<secret>').", color = MaterialTheme.colorScheme.error)
         }
         item {
             HorizontalDivider(Modifier.padding(vertical = 12.dp))
@@ -478,7 +513,7 @@ fun ConnectScreen(app: KairosApp) {
             var confirm by remember { mutableStateOf(false) }
             if (!confirm) OutlinedButton(onClick = { confirm = true }) { Text("Shut down KAIROS…") }
             else Row {
-                Button(onClick = { app.emergencyKill() }, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFB00020))) { Text("YES - SHUT DOWN") }
+                Button(onClick = { app.emergencyKill() }, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)) { Text("YES - SHUT DOWN") }
                 Spacer(Modifier.width(8.dp))
                 TextButton(onClick = { confirm = false }) { Text("Cancel") }
             }
@@ -670,6 +705,7 @@ fun MediaScreen(app: KairosApp) {
     var voskReady by remember { mutableStateOf(org.kairos.agent.voice.VoskModels.installed(voskDir) != null) }
     var voskMsg by remember { mutableStateOf("") }
     val systemAvailable = remember { android.speech.SpeechRecognizer.isRecognitionAvailable(ctx) }
+    val mediaAvailable = remember { app.media.available() }
 
     fun start(fmt: String) {
         if (!app.characters.can("download_media")) { line = "'${app.characters.active().name}' is not permitted to download media."; return }
@@ -694,11 +730,13 @@ fun MediaScreen(app: KairosApp) {
     LazyColumn(Modifier.fillMaxSize().padding(12.dp).testTag("media")) {
         item {
             Text("Download audio / video", style = MaterialTheme.typography.titleMedium)
+            if (!mediaAvailable) Text("On-device download is off in this build (no yt-dlp). Install the 'full' build, or download on the paired PC.",
+                color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
             OutlinedTextField(url, { url = it }, Modifier.fillMaxWidth().testTag("media_url"), label = { Text("Video page URL") }, singleLine = true)
             Row(Modifier.padding(vertical = 4.dp)) {
-                Button(enabled = url.isNotBlank() && procId == null, onClick = { start("mp3") }, modifier = Modifier.testTag("media_mp3")) { Text("MP3 (audio)") }
+                Button(enabled = mediaAvailable && url.isNotBlank() && procId == null, onClick = { start("mp3") }, modifier = Modifier.testTag("media_mp3")) { Text("MP3 (audio)") }
                 Spacer(Modifier.width(6.dp))
-                Button(enabled = url.isNotBlank() && procId == null, onClick = { start("mp4") }, modifier = Modifier.testTag("media_mp4")) { Text("MP4 (video)") }
+                Button(enabled = mediaAvailable && url.isNotBlank() && procId == null, onClick = { start("mp4") }, modifier = Modifier.testTag("media_mp4")) { Text("MP4 (video)") }
                 Spacer(Modifier.width(6.dp))
                 if (procId != null) OutlinedButton(onClick = { procId?.let { app.media.cancel(it) } }) { Text("Cancel") }
             }
@@ -707,7 +745,7 @@ fun MediaScreen(app: KairosApp) {
             OutlinedButton(onClick = {
                 line = "Updating yt-dlp…"
                 app.mediaScope.launch {
-                    val r = runCatching { app.media.ensureInit(); org.kairos.agent.media.YtDlpEngine(app).update() }
+                    val r = runCatching { app.media.ensureInit(); org.kairos.agent.media.MediaEngines.update(app) }
                     scope.launch { line = r.fold({ "yt-dlp: $it (${app.media.version() ?: "?"})" }, { "Update failed: ${it.message}" }) }
                 }
             }) { Text("Update yt-dlp") }

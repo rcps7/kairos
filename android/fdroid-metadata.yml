@@ -1,0 +1,46 @@
+# F-Droid metadata template for KAIROS (org.kairos.agent).
+#
+# This file is a ready-to-copy template for the F-Droid data repository
+# (https://gitlab.com/fdroid/fdroiddata, path: metadata/org.kairos.agent.yml).
+# It is NOT the build itself: F-Droid builds the `fdroid` product flavour from source.
+#
+# Before submitting:
+#   1. Replace <COMMIT_SHA> with the exact commit you want built (F-Droid pins commits).
+#   2. Confirm the versionCode/versionName in android/app/build.gradle.kts.
+#   3. Add screenshots under android/fastlane/metadata/android/en-US/images/phoneScreenshots/.
+#   4. After the first reproducible build, add AllowedAPKSigningKeys with your key fingerprint.
+
+Categories:
+  - Internet
+  - Development
+
+License: GPL-3.0-or-later
+
+AuthorName: RC
+AuthorEmail: roopchandps@gmail.com
+
+SourceCode: https://github.com/rcps7/kairos
+IssueTracker: https://github.com/rcps7/kairos/issues
+Changelog: https://github.com/rcps7/kairos/blob/HEAD/android/CHANGELOG.md
+
+AutoName: KAIROS
+
+RepoType: git
+Repo: https://github.com/rcps7/kairos.git
+
+Builds:
+  - versionName: 0.16.5-android.1-fdroid
+    versionCode: 1
+    commit: <COMMIT_SHA>
+    subdir: android
+    # The `fdroid` flavour excludes youtubedl-android (prebuilt yt-dlp/Python/ffmpeg),
+    # which is not accepted by the mainline repository. The `full` flavour, which adds
+    # on-device media download, is distributed via IzzyOnDroid and GitHub Releases.
+    gradle:
+      - fdroid
+    output: app/build/outputs/apk/fdroid/release/app-fdroid-release.apk
+
+AutoUpdateMode: Version
+UpdateCheckMode: Tags ^v[0-9.]+$
+CurrentVersion: 0.16.5-android.1-fdroid
+CurrentVersionCode: 1
