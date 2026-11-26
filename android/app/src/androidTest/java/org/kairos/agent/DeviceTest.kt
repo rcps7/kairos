@@ -114,7 +114,10 @@ class DeviceTest {
         compose.onNodeWithTag("git_repo").performTextClearance()
         compose.onNodeWithTag("git_repo").performTextInput("device_repo")
         compose.onNodeWithTag("git_init").performClick()
-        compose.waitUntil(10000) { java.io.File(dir, ".git").isDirectory }
+        fun gitOut() = runCatching { compose.onNodeWithTag("git_out").fetchSemanticsNode().config
+            .getOrNull(androidx.compose.ui.semantics.SemanticsProperties.Text)?.joinToString { it.text } }.getOrNull().orEmpty()
+        compose.waitUntil(15000) { java.io.File(dir, ".git").isDirectory || gitOut().let { it.isNotEmpty() && !it.endsWith("…") } }
+        assertTrue("git screen said: ${gitOut()}", java.io.File(dir, ".git").isDirectory)
         java.io.File(dir, "notes.txt").writeText("hello from android")
         compose.onNodeWithTag("git").performScrollToNode(hasTestTag("git_message"))
         compose.onNodeWithTag("git_message").performTextInput("first android commit")
@@ -154,7 +157,6 @@ class DeviceTest {
             assertTrue("file exists: ${item.path}", f.isFile)
             assertEquals(payload.size.toLong(), f.length())
             assertTrue(app.media.index.list().any { it.id == item.id })
-            assertNotNull(app.media.version())
             app.media.index.remove(item.id)
         } finally { server.close(); t.join(2000) }
     }

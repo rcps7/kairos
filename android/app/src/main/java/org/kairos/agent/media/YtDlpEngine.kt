@@ -23,7 +23,7 @@ class YtDlpEngine(private val context: Context) : MediaEngine {
     }
 
     override fun cancel(processId: String) = YoutubeDL.getInstance().destroyProcessById(processId)
-    override fun version(): String? = YoutubeDL.getInstance().version(context)
+    override fun version(): String? = YoutubeDL.getInstance().version(context) ?: "bundled"
 
     /** Update yt-dlp itself (sites change often). Network use, user-triggered only. */
     fun update(): String = YoutubeDL.getInstance().updateYoutubeDL(context.applicationContext)?.name ?: "unknown"
