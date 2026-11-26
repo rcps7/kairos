@@ -48,6 +48,25 @@ class DeviceTest {
         m.deleteDocument(id); assertTrue(m.allDocuments().isEmpty())
     }
 
+    /** Desktop planner.py on SQLite: create, list, update, delete. */
+    @Test fun planStoreOnSqlite() {
+        val m = MemoryStore(ctx, null)
+        val pid = m.create("Build a robot", listOf("design", "assemble"))
+        assertEquals(1, m.list().size)
+        val p = m.get(pid)!!
+        assertEquals(listOf(0, 1), p.steps.map { it.idx })
+        m.updateStep(p.steps[0].id, "done", "ok")
+        assertEquals("done" to "ok", m.get(pid)!!.steps[0].let { it.status to it.result })
+        m.addStep(pid, "test"); assertEquals(3, m.get(pid)!!.steps.size)
+        m.delete(pid); assertNull(m.get(pid))
+    }
+
+    @Test fun plansTabAndModeChipsShow() {
+        compose.onNodeWithTag("mode_execute").assertIsDisplayed()
+        compose.onNodeWithTag("tab_Plans").performClick()
+        compose.onNodeWithTag("plans").assertIsDisplayed()
+    }
+
     /** The Library tab is reachable from the bottom bar. */
     @Test fun libraryTabOpens() {
         compose.onNodeWithTag("tab_Library").performClick()

@@ -44,23 +44,32 @@ class MainViewModel(app: android.app.Application) : AndroidViewModel(app) {
     var busy by mutableStateOf(false); private set
     var status by mutableStateOf(""); private set
 
+    var mode by mutableStateOf("chat")
+
+    /** Every turn goes through the FIFO job queue, so the user can keep typing while one runs. */
     fun send(text: String) {
-        if (text.isBlank() || busy) return
-        messages.add(UiMsg("user", text))
+        if (text.isBlank()) return
+        messages.add(UiMsg("user", if (mode == "chat") text else "[$mode] $text"))
         val idx = messages.size
         messages.add(UiMsg("assistant", ""))
-        busy = true; status = ""
-        viewModelScope.launch {
-            try {
-                val reply = k.engine.chat(text) { d ->
-                    // Deltas arrive on the IO thread; apply them on the main thread in order.
-                    main.post { messages[idx] = messages[idx].copy(text = messages[idx].text + d) }
-                }
-                messages[idx] = UiMsg("assistant", reply)
-            } catch (e: Exception) {
-                messages[idx] = UiMsg("error", e.message ?: e.toString())
-            } finally { busy = false }
-        }
+        val m = mode
+        busy = true
+        k.jobs.submit(org.kairos.agent.jobs.Job(label = "chat",
+            onProgress = { _, p -> main.post { status = p } },
+            onDone = { _, r -> main.post { messages[idx] = UiMsg("assistant", r as String); finish() } },
+            onError = { _, e -> main.post { messages[idx] = UiMsg("error", e.message ?: e.toString()); finish() } },
+        ) { _, progress ->
+            k.agent.run(text, m, progress) { d ->
+                // Deltas arrive on a worker thread; apply them on the main thread in order.
+                main.post { messages[idx] = messages[idx].copy(text = messages[idx].text + d) }
+            }.text
+        })
+    }
+
+    private fun finish() = Unit
+
+    init {
+        viewModelScope.launch { k.jobs.pendingFlow.collect { n -> busy = n > 0; if (n == 0) status = "" } }
     }
 
     fun clear() { k.store.clearMessages(); messages.clear() }
@@ -86,7 +95,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun KairosRoot(vm: MainViewModel, app: KairosApp) {
     var tab by remember { mutableIntStateOf(0) }
-    val tabs = listOf("Chat", "Provider", "Characters", "Memory", "Library")
+    val tabs = listOf("Chat", "Provider", "Characters", "Memory", "Library", "Plans")
     Scaffold(
         topBar = { TopAppBar(title = { Text("KAIROS") }) },
         bottomBar = {
@@ -104,12 +113,14 @@ fun KairosRoot(vm: MainViewModel, app: KairosApp) {
                 1 -> ProviderScreen(vm, app)
                 2 -> CharacterScreen(app)
                 3 -> MemoryScreen(app)
-                else -> LibraryScreen(app)
+                4 -> LibraryScreen(app)
+                else -> PlansScreen(app)
             }
         }
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatScreen(vm: MainViewModel) {
     var input by remember { mutableStateOf("") }
@@ -130,11 +141,18 @@ fun ChatScreen(vm: MainViewModel) {
         }
         Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
             OutlinedTextField(input, { input = it }, Modifier.weight(1f).testTag("input"),
-                placeholder = { Text("Message Kairos (/remember, /recall, /whoami)") })
+                placeholder = { Text("Message Kairos (/help for commands)") })
             Spacer(Modifier.width(6.dp))
-            Button(onClick = { vm.send(input); input = "" }, enabled = !vm.busy, modifier = Modifier.testTag("send")) {
-                Text(if (vm.busy) "…" else "Send")
+            Button(onClick = { vm.send(input); input = "" }, modifier = Modifier.testTag("send")) {
+                Text("Send")
             }
+        }
+        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+            listOf("chat" to "Chat", "plan" to "Plan", "execute" to "Execute").forEach { (id, label) ->
+                FilterChip(selected = vm.mode == id, onClick = { vm.mode = id }, label = { Text(label) },
+                    modifier = Modifier.padding(end = 6.dp).testTag("mode_$id"))
+            }
+            if (vm.busy) Text("working…", Modifier.testTag("busy"))
         }
         if (vm.status.isNotEmpty()) Text(vm.status)
     }
@@ -257,6 +275,26 @@ fun LibraryScreen(app: KairosApp) {
                         Text(d.summary.take(600))
                         TextButton(onClick = { app.store.deleteDocument(d.id); docs = app.store.allDocuments() }) { Text("Delete") }
                     }
+                }
+            }
+        }
+    }
+}
+
+
+/** Durable plans (desktop: Plans panel). */
+@Composable
+fun PlansScreen(app: KairosApp) {
+    var plans by remember { mutableStateOf(app.store.list(100)) }
+    LaunchedEffect(Unit) { while (true) { kotlinx.coroutines.delay(1500); plans = app.store.list(100) } }
+    LazyColumn(Modifier.fillMaxSize().padding(12.dp).testTag("plans")) {
+        if (plans.isEmpty()) item { Text("No plans yet. Switch the chat to Plan or Execute mode and describe a goal.") }
+        items(plans) { p ->
+            Card(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                Column(Modifier.padding(10.dp)) {
+                    Text("${p.goal} [${p.status}]", style = MaterialTheme.typography.titleSmall)
+                    p.steps.forEach { s -> Text("${s.idx + 1}. [${s.status}] ${s.title}") }
+                    TextButton(onClick = { app.store.delete(p.id); plans = app.store.list(100) }) { Text("Delete") }
                 }
             }
         }

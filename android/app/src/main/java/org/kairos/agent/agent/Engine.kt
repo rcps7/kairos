@@ -17,6 +17,11 @@ fun interface ChatBackend {
     suspend fun complete(messages: List<ChatMessage>, onDelta: ((String) -> Unit)?): String
 }
 
+const val ADVANCED_PROTOCOL = "ADVANCED TOOLS\nYou may also request these host tools with " +
+    "<tool name=\"NAME\">{JSON arguments}</tool>:\n" +
+    "  - plan_create(goal, steps)\n  - plan_add_step(plan_id, title)\n" +
+    "  - plan_update_step(step_id, status, result)\n  - plan_status(plan_id)"
+
 class Engine(
     private val characters: CharacterRegistry,
     private val memory: AgentMemory,
@@ -61,6 +66,18 @@ class Engine(
         listOf(ChatMessage("system", systemPrompt(userText))) +
             memory.history(historyTurns * 2) +
             ChatMessage("user", userText)
+
+    /**
+     * One self-contained turn with tools (Execute mode steps): not added to chat history.
+     * Desktop _tool_loop(full_tools=True) also advertises the advanced <tool name> protocol.
+     */
+    suspend fun runTurn(userText: String): String {
+        val sys = systemPrompt(userText) + "\n\n" + ADVANCED_PROTOCOL
+        val messages = listOf(ChatMessage("system", sys), ChatMessage("user", userText))
+        val reply = backend.complete(messages, null)
+        val (clean, calls) = Tools.parse(reply)
+        return if (calls.isEmpty() || tools == null) clean.ifEmpty { reply } else toolLoop(messages, reply, calls)
+    }
 
     /** Slash commands that run a tool directly: /search, /learn, /scrape. */
     private suspend fun toolCommand(text: String): String? {

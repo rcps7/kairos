@@ -14,6 +14,9 @@ import org.kairos.agent.llm.ChatMessage
 import org.kairos.agent.llm.LlmClient
 import org.kairos.agent.agent.Library
 import org.kairos.agent.agent.WebTools
+import org.kairos.agent.agent.Agent
+import org.kairos.agent.agent.PlanTools
+import org.kairos.agent.jobs.JobQueue
 import org.kairos.agent.web.WebScraper
 import org.kairos.agent.web.WebSearcher
 
@@ -27,6 +30,8 @@ class KairosApp : Application() {
     lateinit var webTools: WebTools
     val searcher = WebSearcher()
     val scraper = WebScraper()
+    val jobs = JobQueue()
+    lateinit var agent: Agent
 
     override fun onCreate() {
         super.onCreate()
@@ -56,7 +61,10 @@ class KairosApp : Application() {
                 override fun add(url: String, title: String, html: String, text: String, summary: String) =
                     store.addDocument(url, title, html, text, summary)
             },
+            fallback = PlanTools(store),
         )
         engine = Engine(characters, mem, backend, tools = webTools)
+        agent = Agent(engine, backend, store, mem)
+        KairosJobService.observe(this, jobs)
     }
 }
