@@ -114,8 +114,11 @@ class DeviceTest {
         compose.onNodeWithTag("git_repo").performTextClearance()
         compose.onNodeWithTag("git_repo").performTextInput("device_repo")
         compose.onNodeWithTag("git_init").performClick()
-        fun gitOut() = runCatching { compose.onNodeWithTag("git_out").fetchSemanticsNode().config
-            .getOrNull(androidx.compose.ui.semantics.SemanticsProperties.Text)?.joinToString { it.text } }.getOrNull().orEmpty()
+        fun gitOut(): String {
+            val key = androidx.compose.ui.semantics.SemanticsProperties.Text
+            val c = compose.onAllNodesWithTag("git_out").fetchSemanticsNodes().firstOrNull()?.config ?: return ""
+            return if (key in c) c[key].joinToString { t -> t.text } else ""
+        }
         compose.waitUntil(15000) { java.io.File(dir, ".git").isDirectory || gitOut().let { it.isNotEmpty() && !it.endsWith("…") } }
         assertTrue("git screen said: ${gitOut()}", java.io.File(dir, ".git").isDirectory)
         java.io.File(dir, "notes.txt").writeText("hello from android")
