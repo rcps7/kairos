@@ -29,7 +29,6 @@ android {
     productFlavors {
         create("fdroid") {
             dimension = "distribution"
-            isDefault = true
             versionNameSuffix = "-fdroid"
         }
         create("full") {
