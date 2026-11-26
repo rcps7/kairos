@@ -15,7 +15,9 @@ import android.os.IBinder
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import org.kairos.agent.jobs.JobQueue
@@ -33,8 +35,22 @@ class KairosJobService : Service() {
             .setOngoing(true).build()
         if (Build.VERSION.SDK_INT >= 29) startForeground(ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
         else startForeground(ID, n)
+        // The service stops itself once the queue drains. Callers never call stopService() directly:
+        // stopping before onStartCommand reaches startForeground() crashes the app on Android 10+.
+        if (watcher == null) {
+            val jobs = (application as KairosApp).jobs
+            watcher = scope.launch {
+                jobs.pendingFlow.first { it == 0 }
+                stopForeground(STOP_FOREGROUND_REMOVE); stopSelf(); watcher = null
+            }
+        }
         return START_NOT_STICKY
     }
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private var watcher: kotlinx.coroutines.Job? = null
+
+    override fun onDestroy() { scope.cancel(); super.onDestroy() }
 
     companion object {
         private const val CHANNEL = "kairos_jobs"
@@ -45,8 +61,9 @@ class KairosJobService : Service() {
             CoroutineScope(SupervisorJob() + Dispatchers.Main).launch {
                 jobs.pendingFlow.map { it > 0 }.distinctUntilChanged().collect { busy ->
                     val i = Intent(ctx, KairosJobService::class.java)
+                    if (!busy) return@collect
                     try {
-                        if (busy) ctx.startForegroundService(i) else ctx.stopService(i)
+                        ctx.startForegroundService(i)
                     } catch (_: Exception) {
                         // Background-start restrictions: jobs still run in-process while the app is visible.
                     }

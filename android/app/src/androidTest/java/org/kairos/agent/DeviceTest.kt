@@ -110,10 +110,10 @@ class DeviceTest {
         val app = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext as KairosApp
         val dir = java.io.File(app.git.root, "device_repo"); dir.deleteRecursively()
         compose.onNodeWithTag("more").performClick(); compose.onNodeWithTag("tab_Git").performClick()
-        if (!app.settings.gitEnabled) compose.onNodeWithTag("git_enabled").performClick()
+        if (!app.settings.gitEnabled) compose.onNodeWithTag("git_enabled").performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick)
         compose.onNodeWithTag("git_repo").performTextClearance()
         compose.onNodeWithTag("git_repo").performTextInput("device_repo")
-        compose.onNodeWithTag("git_init").performClick()
+        compose.onNodeWithTag("git_init").performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick)
         fun gitOut(): String {
             val key = androidx.compose.ui.semantics.SemanticsProperties.Text
             val c = compose.onAllNodesWithTag("git_out").fetchSemanticsNodes().firstOrNull()?.config ?: return ""
@@ -125,7 +125,7 @@ class DeviceTest {
         compose.onNodeWithTag("git").performScrollToNode(hasTestTag("git_message"))
         compose.onNodeWithTag("git_message").performTextInput("first android commit")
         compose.onNodeWithTag("git").performScrollToNode(hasTestTag("git_commit"))
-        compose.onNodeWithTag("git_commit").performClick()
+        compose.onNodeWithTag("git_commit").performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick)
         compose.waitUntil(15000) { runCatching { app.git.log(5, "device_repo") }.getOrDefault("").contains("first android commit") }
         assertTrue(app.git.status("device_repo").contains("clean working tree"))
         app.settings.gitEnabled = false
