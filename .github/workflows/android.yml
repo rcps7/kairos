@@ -2,9 +2,9 @@ name: Android
 
 on:
   push:
-    paths: ["android/**", ".github/workflows/android.yml"]
+    paths: ["android/**", "kairos/remote_api.py", "tests/test_remote_api.py", ".github/workflows/android.yml"]
   pull_request:
-    paths: ["android/**", ".github/workflows/android.yml"]
+    paths: ["android/**", "kairos/remote_api.py", "tests/test_remote_api.py", ".github/workflows/android.yml"]
   workflow_dispatch:
 
 jobs:
@@ -17,8 +17,14 @@ jobs:
         with: { distribution: temurin, java-version: "17" }
       - uses: gradle/actions/setup-gradle@v4
         with: { gradle-version: "8.10.2" }
+      # Python + cryptography let RemoteTest talk to the real desktop remote server (interop).
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Python deps for remote interop test
+        run: python -m pip install --quiet "cryptography>=42" pytest
       - name: Unit tests
         run: gradle --no-daemon testDebugUnitTest
+        env: { KAIROS_PYTHON: python }
       - name: Build debug APK
         run: gradle --no-daemon assembleDebug
       - uses: actions/upload-artifact@v4

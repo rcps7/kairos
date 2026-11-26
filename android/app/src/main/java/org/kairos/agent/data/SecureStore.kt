@@ -57,5 +57,7 @@ class SecureStore(context: Context) {
         const val EMAIL_PASSWORD = "email_password"
         const val TELEGRAM_TOKEN = "telegram_token"
         const val GIT_TOKEN = "git_token"
+        /** kairos://pair?... link for the paired PC (contains the shared secret). */
+        const val REMOTE_PAIRING = "remote_pairing"
     }
 }

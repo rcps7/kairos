@@ -60,6 +60,8 @@ class KairosApp : Application() {
             org.kairos.agent.media.MediaIndex(java.io.File(filesDir, "media.json")),
             getExternalFilesDir("media") ?: java.io.File(filesDir, "media"))
     }
+    fun remote(): org.kairos.agent.remote.RemoteClient? = secrets.get(SecureStore.REMOTE_PAIRING)
+        ?.let { runCatching { org.kairos.agent.remote.RemoteClient(org.kairos.agent.remote.PairingLink.parse(it)) }.getOrNull() }
     val mediaScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO)
 
     fun gitConfig() = GitConfig(settings.gitEnabled, settings.gitAllowPush, settings.gitAllowPull,

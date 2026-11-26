@@ -111,8 +111,8 @@ fun KairosRoot(vm: MainViewModel, app: KairosApp) {
             TopAppBar(title = { Text("KAIROS") }, actions = {
                 TextButton(onClick = { more = true }, modifier = Modifier.testTag("more")) { Text("More ▾") }
                 DropdownMenu(expanded = more, onDismissRequest = { more = false }) {
-                    listOf(7 to "Skills", 6 to "Connect", 8 to "Git", 9 to "Media").forEach { (i, t) ->
-                        DropdownMenuItem(text = { Text(when (t) { "Connect" -> "Email & Telegram"; "Media" -> "Media & Voice"; else -> t }) },
+                    listOf(10 to "PC", 7 to "Skills", 6 to "Connect", 8 to "Git", 9 to "Media").forEach { (i, t) ->
+                        DropdownMenuItem(text = { Text(when (t) { "Connect" -> "Email & Telegram"; "Media" -> "Media & Voice"; "PC" -> "PC remote"; else -> t }) },
                             onClick = { tab = i; more = false }, modifier = Modifier.testTag("tab_$t"))
                     }
                 }
@@ -138,7 +138,8 @@ fun KairosRoot(vm: MainViewModel, app: KairosApp) {
                 6 -> ConnectScreen(app)
                 7 -> SkillsScreen(app)
                 8 -> GitScreen(app)
-                else -> MediaScreen(app)
+                9 -> MediaScreen(app)
+                else -> PcScreen(app)
             }
         }
     }
@@ -753,4 +754,81 @@ fun MediaScreen(app: KairosApp) {
             if (voskMsg.isNotEmpty()) Text(voskMsg)
         }
     }
+}
+
+
+/** Control a desktop Kairos over the LAN (desktop: kairos/remote_api.py). */
+@Composable
+fun PcScreen(app: KairosApp) {
+    val scope = rememberCoroutineScope()
+    var link by remember { mutableStateOf(app.secrets.get(SecureStore.REMOTE_PAIRING).orEmpty()) }
+    val pairing = remember(link) { runCatching { org.kairos.agent.remote.PairingLink.parse(link) }.getOrNull() }
+    var status by remember { mutableStateOf("") }
+    var prompt by remember { mutableStateOf("") }
+    var mode by remember { mutableStateOf("chat") }
+    var output by remember { mutableStateOf("") }
+    var jobs by remember { mutableStateOf<List<org.kairos.agent.remote.RemoteJob>>(emptyList()) }
+    var busy by remember { mutableStateOf(false) }
+    var confirmKill by remember { mutableStateOf(false) }
+
+    fun io(label: String, block: (org.kairos.agent.remote.RemoteClient) -> Unit) {
+        val c = app.remote() ?: run { status = "Pair with a PC first."; return }
+        busy = true; status = label
+        app.mediaScope.launch {
+            val err = runCatching { block(c) }.exceptionOrNull()
+            scope.launch { busy = false; if (err != null) status = "Error: ${err.message}" }
+        }
+    }
+
+    LazyColumn(Modifier.fillMaxSize().padding(12.dp).testTag("pc")) {
+        item {
+            Text("Remote control of Kairos on your PC", style = MaterialTheme.typography.titleMedium)
+            Text("On the PC run: python -m kairos.remote_api pair, set remote.enabled, restart Kairos, then paste the kairos://pair link here. Both devices must be on the same network.")
+            OutlinedTextField(link, { link = it.trim() }, Modifier.fillMaxWidth().testTag("pc_link"), label = { Text("Pairing link") },
+                singleLine = true, visualTransformation = PasswordVisualTransformation())
+            Row {
+                Button(enabled = pairing != null, onClick = {
+                    app.secrets.put(SecureStore.REMOTE_PAIRING, link); status = "Paired with ${pairing?.name}."
+                }, modifier = Modifier.testTag("pc_save")) { Text("Save pairing") }
+                Spacer(Modifier.width(6.dp))
+                OutlinedButton(onClick = { app.secrets.put(SecureStore.REMOTE_PAIRING, null); link = ""; status = "Unpaired." }) { Text("Forget") }
+                Spacer(Modifier.width(6.dp))
+                OutlinedButton(enabled = !busy, onClick = { io("Connecting…") { c -> val s = c.ping(); scope.launch { status = "Connected: $s" } } },
+                    modifier = Modifier.testTag("pc_ping")) { Text("Test") }
+            }
+            if (link.isNotEmpty() && pairing == null) Text("That doesn't look like a valid pairing link.")
+            if (status.isNotEmpty()) Text(status, Modifier.testTag("pc_status"))
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
+            OutlinedTextField(prompt, { prompt = it }, Modifier.fillMaxWidth().testTag("pc_prompt"), label = { Text("Ask or give the PC a task") })
+            Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                listOf("chat" to "Chat", "plan" to "Plan", "execute" to "Execute").forEach { (id, l) ->
+                    FilterChip(selected = mode == id, onClick = { mode = id }, label = { Text(l) }, modifier = Modifier.padding(end = 6.dp))
+                }
+            }
+            Row {
+                Button(enabled = !busy && prompt.isNotBlank(), onClick = {
+                    val p = prompt
+                    io("Running on PC…") { c ->
+                        val j = c.runJob(p, mode) { u -> scope.launch { status = "PC job ${u.id}: ${u.status} ${u.progress}".trim() } }
+                        val js = c.jobs()
+                        scope.launch { output = j.result ?: "Error: ${j.error}"; status = "PC job ${j.id}: ${j.status}"; jobs = js }
+                    }
+                }, modifier = Modifier.testTag("pc_run")) { Text("Run on PC") }
+                Spacer(Modifier.width(6.dp))
+                OutlinedButton(enabled = !busy, onClick = { io("Loading jobs…") { c -> val js = c.jobs(); scope.launch { jobs = js; status = "${js.size} jobs" } } }) { Text("Jobs") }
+                Spacer(Modifier.width(6.dp))
+                OutlinedButton(enabled = !busy, onClick = { confirmKill = true }) { Text("Kill PC") }
+            }
+            if (output.isNotEmpty()) androidx.compose.foundation.text.selection.SelectionContainer {
+                Text(output, Modifier.padding(top = 8.dp).testTag("pc_output"))
+            }
+        }
+        items(jobs, key = { it.id }) { j ->
+            Text("${j.id} · ${j.mode} · ${j.status}: ${j.prompt.take(80)}", Modifier.padding(vertical = 2.dp))
+        }
+    }
+    if (confirmKill) AlertDialog(onDismissRequest = { confirmKill = false },
+        title = { Text("Kill switch on the PC?") }, text = { Text("This stops Kairos on the paired PC.") },
+        confirmButton = { TextButton(onClick = { confirmKill = false; io("Sending kill…") { c -> val r = c.kill(); scope.launch { status = r } } }) { Text("Kill") } },
+        dismissButton = { TextButton(onClick = { confirmKill = false }) { Text("Cancel") } })
 }
