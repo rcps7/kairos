@@ -82,7 +82,7 @@ object Tools {
         RE_GENERIC.findAll(text).forEach { m ->
             val inner = m.groupValues[2]
             val call = fromName(m.groupValues[1], RE_INNER.find(inner)?.groupValues?.get(2) ?: inner.trim())
-                ?: ToolCall(m.groupValues[1], RE_JSON.find(inner)?.let { obj(it.value) }
+                ?: ToolCall(m.groupValues[1], (obj(inner.trim()) ?: RE_JSON.find(inner)?.let { obj(it.value) })
                     ?.mapValues { (_, v) -> (v as? JsonPrimitive)?.contentOrNull ?: v.toString() } ?: emptyMap())
             calls += call; spans += m.range
         }
