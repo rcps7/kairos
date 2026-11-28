@@ -59,6 +59,7 @@ jobs:
           api-level: 29
           arch: x86_64
           target: default
+          profile: pixel_5
           disable-animations: true
           working-directory: android
           script: |
