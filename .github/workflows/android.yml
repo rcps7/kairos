@@ -63,6 +63,13 @@ jobs:
           working-directory: android
           script: |
             gradle --no-daemon connectedFullDebugAndroidTest
+            # AGP uninstalls the APKs when the connected test finishes, so rebuild,
+            # reinstall and run only the screenshot test (am instrument keeps them
+            # installed), then pull the PNGs from internal storage.
+            gradle --no-daemon assembleFullDebug assembleFullDebugAndroidTest
+            adb install -r app/build/outputs/apk/full/debug/app-full-debug.apk || true
+            adb install -r -t app/build/outputs/apk/androidTest/full/debug/app-full-debug-androidTest.apk || true
+            adb shell am instrument -w -e class org.kairos.agent.ScreenshotTest org.kairos.agent.test/androidx.test.runner.AndroidJUnitRunner || true
             mkdir -p screenshots
             adb shell run-as org.kairos.agent ls -l files/screenshots || true
             for f in $(adb shell run-as org.kairos.agent ls files/screenshots | tr -d '\r'); do
