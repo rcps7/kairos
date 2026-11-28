@@ -72,9 +72,7 @@ jobs:
             adb shell am instrument -w -e class org.kairos.agent.ScreenshotTest org.kairos.agent.test/androidx.test.runner.AndroidJUnitRunner || true
             mkdir -p screenshots
             adb shell run-as org.kairos.agent ls -l files/screenshots || true
-            for f in $(adb shell run-as org.kairos.agent ls files/screenshots | tr -d '\r'); do
-              adb exec-out run-as org.kairos.agent cat "files/screenshots/$f" > "screenshots/$f" || true
-            done
+            for f in $(adb shell run-as org.kairos.agent ls files/screenshots | tr -d '\r'); do adb exec-out run-as org.kairos.agent cat "files/screenshots/$f" > "screenshots/$f" || true; done
             ls -l screenshots || true
       - uses: actions/upload-artifact@v4
         if: always()
