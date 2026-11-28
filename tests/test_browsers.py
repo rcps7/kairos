@@ -41,6 +41,10 @@ def test_list_choices_includes_bundled(monkeypatch):
 
 
 def test_running_ids_parsing(monkeypatch):
+    import sys
+    import pytest
+    if sys.platform != "win32":
+        pytest.skip("tasklist CSV parsing is Windows-only")
     class _R:
         stdout = ('"msedge.exe","1","Console","1","1 K"\n'
                   '"chrome.exe","2","Console","1","1 K"\n'
