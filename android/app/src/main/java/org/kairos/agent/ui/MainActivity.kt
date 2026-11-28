@@ -811,8 +811,12 @@ fun PcScreen(app: KairosApp) {
     var busy by remember { mutableStateOf(false) }
     var confirmKill by remember { mutableStateOf(false) }
 
+    // Prefer the pasted link so 'Test'/'Run' work before saving; fall back to the saved pairing.
+    fun client(): org.kairos.agent.remote.RemoteClient? =
+        pairing?.let { runCatching { org.kairos.agent.remote.RemoteClient(it) }.getOrNull() } ?: app.remote()
+
     fun io(label: String, block: (org.kairos.agent.remote.RemoteClient) -> Unit) {
-        val c = app.remote() ?: run { status = "Pair with a PC first."; return }
+        val c = client() ?: run { status = "Pair with a PC first."; return }
         busy = true; status = label
         app.mediaScope.launch {
             val err = runCatching { block(c) }.exceptionOrNull()
@@ -823,7 +827,7 @@ fun PcScreen(app: KairosApp) {
     LazyColumn(Modifier.fillMaxSize().padding(12.dp).testTag("pc")) {
         item {
             Text("Remote control of Kairos on your PC", style = MaterialTheme.typography.titleMedium)
-            Text("On the PC run: python -m kairos.remote_api pair, set remote.enabled, restart Kairos, then paste the kairos://pair link here. Both devices must be on the same network.")
+            Text("On the PC run: python -m kairos.remote_api pair, set remote.enabled, restart Kairos, then paste the kairos://pair link here and press Save. Both devices must be on the same network.")
             OutlinedTextField(link, { link = it.trim() }, Modifier.fillMaxWidth().testTag("pc_link"), label = { Text("Pairing link") },
                 singleLine = true, visualTransformation = PasswordVisualTransformation())
             Row {

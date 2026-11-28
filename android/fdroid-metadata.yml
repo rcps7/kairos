@@ -41,6 +41,6 @@ Builds:
     output: app/build/outputs/apk/fdroid/release/app-fdroid-release.apk
 
 AutoUpdateMode: Version
-UpdateCheckMode: Tags ^v[0-9.]+$
+UpdateCheckMode: Tags ^v[0-9.]+-android\.[0-9]+$
 CurrentVersion: 0.16.5-android.1-fdroid
 CurrentVersionCode: 1

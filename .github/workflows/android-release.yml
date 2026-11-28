@@ -1,0 +1,61 @@
+name: Android release
+
+# Builds the two release APKs and attaches them to the GitHub Release for the tag.
+# Tags look like: v0.16.5-android.1
+on:
+  push:
+    tags: ["v*-android.*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build and attach the APKs to"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: android } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "17" }
+      - uses: gradle/actions/setup-gradle@v4
+        with: { gradle-version: "8.10.2" }
+
+      # Set these repository secrets to produce signed APKs. Without them the build is
+      # unsigned (F-Droid signs its own builds).
+      - name: Build release APKs
+        env:
+          KAIROS_KEYSTORE: ${{ secrets.KAIROS_KEYSTORE }}
+          KAIROS_KEYSTORE_PASSWORD: ${{ secrets.KAIROS_KEYSTORE_PASSWORD }}
+          KAIROS_KEY_ALIAS: ${{ secrets.KAIROS_KEY_ALIAS }}
+          KAIROS_KEY_PASSWORD: ${{ secrets.KAIROS_KEY_PASSWORD }}
+        run: gradle --no-daemon assembleFdroidRelease assembleFullRelease
+
+      - name: Collect APKs and checksums
+        run: |
+          mkdir -p out
+          cp app/build/outputs/apk/fdroid/release/*.apk out/ 2>/dev/null || true
+          cp app/build/outputs/apk/full/release/*.apk out/ 2>/dev/null || true
+          cd out && sha256sum *.apk > SHA256SUMS.txt 2>/dev/null || true
+          ls -l
+
+      - name: Attach to the GitHub Release
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          name: Kairos for Android ${{ github.event.inputs.tag || github.ref_name }}
+          files: |
+            android/out/*.apk
+            android/out/SHA256SUMS.txt
+          fail_on_unmatched_files: false
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kairos-release-apks
+          path: android/out/*.apk
