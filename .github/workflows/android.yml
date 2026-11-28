@@ -63,7 +63,11 @@ jobs:
           working-directory: android
           script: |
             gradle --no-daemon connectedFullDebugAndroidTest
-            adb pull /sdcard/Android/data/org.kairos.agent/files/screenshots ./screenshots || true
+            mkdir -p screenshots
+            adb shell run-as org.kairos.agent ls -l files/screenshots || true
+            for f in $(adb shell run-as org.kairos.agent ls files/screenshots | tr -d '\r'); do
+              adb exec-out run-as org.kairos.agent cat "files/screenshots/$f" > "screenshots/$f" || true
+            done
             ls -l screenshots || true
       - uses: actions/upload-artifact@v4
         if: always()

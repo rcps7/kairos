@@ -27,7 +27,8 @@ class ScreenshotTest {
     private var n = 0
     private val dir: File by lazy {
         val ctx = InstrumentationRegistry.getInstrumentation().targetContext
-        File(ctx.getExternalFilesDir(null), "screenshots").apply {
+        // Internal files dir: pulled from CI with `adb exec-out run-as` (works on scoped storage).
+        File(ctx.filesDir, "screenshots").apply {
             mkdirs()
             listFiles()?.forEach { it.delete() }
         }
