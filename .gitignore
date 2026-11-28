@@ -42,6 +42,8 @@ desktop.ini
 *.jpeg
 *.png
 *.gif
+# ...but track the F-Droid listing screenshots (fastlane metadata).
+!android/fastlane/metadata/android/**/images/phoneScreenshots/*.png
 
 # ---- IDE ----
 .idea/

@@ -7,7 +7,7 @@
 # Before submitting:
 #   1. Replace <COMMIT_SHA> with the exact commit you want built (F-Droid pins commits).
 #   2. Confirm the versionCode/versionName in android/app/build.gradle.kts.
-#   3. Add screenshots under android/fastlane/metadata/android/en-US/images/phoneScreenshots/.
+#   3. Screenshots are in android/fastlane/metadata/android/en-US/images/phoneScreenshots/.
 #   4. After the first reproducible build, add AllowedAPKSigningKeys with your key fingerprint.
 
 Categories:

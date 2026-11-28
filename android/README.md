@@ -70,6 +70,8 @@ release build falls back to the debug key so the APKs are still installable (F-D
 
 - Metadata template: [`fdroid-metadata.yml`](fdroid-metadata.yml) (copy into `fdroiddata`).
 - Listing text and changelogs: `fastlane/metadata/android/en-US/`.
+- Phone screenshots: `fastlane/metadata/android/en-US/images/phoneScreenshots/` (captured from
+  the emulator by CI, see the **Android** workflow's `kairos-screenshots` artifact).
 - Reproducible-build settings (no dependency metadata blob, no self-update) are already applied
   in `app/build.gradle.kts`.
 
