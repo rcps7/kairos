@@ -61,7 +61,15 @@ jobs:
           target: default
           disable-animations: true
           working-directory: android
-          script: gradle --no-daemon connectedFullDebugAndroidTest
+          script: |
+            gradle --no-daemon connectedFullDebugAndroidTest
+            adb pull /sdcard/Android/data/org.kairos.agent/files/screenshots ./screenshots || true
+            ls -l screenshots || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kairos-screenshots
+          path: android/screenshots/
       - uses: actions/upload-artifact@v4
         if: always()
         with:
