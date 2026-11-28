@@ -41,7 +41,7 @@ android {
     signingConfigs {
         create("release") {
             val ks = System.getenv("KAIROS_KEYSTORE")
-            if (ks != null) {
+            if (!ks.isNullOrBlank()) {
                 storeFile = file(ks)
                 storePassword = System.getenv("KAIROS_KEYSTORE_PASSWORD")
                 keyAlias = System.getenv("KAIROS_KEY_ALIAS")
@@ -53,9 +53,11 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
-            if (System.getenv("KAIROS_KEYSTORE") != null) {
-                signingConfig = signingConfigs.getByName("release")
-            }
+            // Sign with the release keystore when provided; otherwise fall back to the
+            // debug key so the GitHub-release APKs are installable (F-Droid rebuilds and
+            // signs the `fdroid` flavour itself).
+            signingConfig = if (!System.getenv("KAIROS_KEYSTORE").isNullOrBlank())
+                signingConfigs.getByName("release") else signingConfigs.getByName("debug")
         }
     }
 
