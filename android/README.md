@@ -35,7 +35,36 @@ gradle connectedFullDebugAndroidTest
 
 Release signing reads `KAIROS_KEYSTORE`, `KAIROS_KEYSTORE_PASSWORD`, `KAIROS_KEY_ALIAS` and
 `KAIROS_KEY_PASSWORD` from the environment; no keys are ever committed. Without them the
-release build is unsigned (F-Droid signs the APK itself).
+release build falls back to the debug key so the APKs are still installable (F-Droid signs
+`fdroid` builds itself).
+
+## Signed releases
+
+1. Create a keystore once (no JDK needed):
+
+   ```sh
+   python android/scripts/make_keystore.py kairos-release.p12
+   ```
+
+   Keep `kairos-release.p12` and `CREDENTIALS.txt` **secret** (never commit them).
+
+2. Store the four secrets on the repository (the script prints the exact values):
+
+   | Secret | Value |
+   |---|---|
+   | `KAIROS_KEYSTORE_BASE64` | base64 of the `.p12` file |
+   | `KAIROS_KEYSTORE_PASSWORD` | store password |
+   | `KAIROS_KEY_ALIAS` | `kairos` |
+   | `KAIROS_KEY_PASSWORD` | key password |
+
+3. The **Android release** workflow decodes the keystore, builds the signed APKs, verifies
+   them with `apksigner --print-certs`, and attaches them (plus `SHA256SUMS.txt`) to the
+   GitHub Release.
+
+> Keep the keystore and passwords safe. Losing them means you cannot update an app already
+> installed from it; leaking them means someone else can. To rotate, replace the secrets, bump
+> `versionCode`, and re-publish.
+
 
 ## F-Droid
 
