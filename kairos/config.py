@@ -124,6 +124,12 @@ DEFAULT_CONFIG = {
             "secret": None
         }
     },
+    "remote": {
+        "enabled": False,
+        "host": "0.0.0.0",
+        "port": 8766,
+        "secret": None
+    },
     "browser": {
         "enabled": False,
         "mode": "ask",
@@ -252,6 +258,10 @@ def load_config() -> dict:
     if not wh_out.get("secret"):
         wh_out["secret"] = _keyring_get("webhook_outbound_secret")
 
+    remote = cfg.setdefault("remote", {})
+    if not remote.get("secret"):
+        remote["secret"] = _keyring_get("remote_secret")
+
     gitcfg = cfg.setdefault("git", {})
     if not gitcfg.get("token"):
         gitcfg["token"] = _keyring_get("git_token")
@@ -300,6 +310,12 @@ def save_config(cfg: dict):
         wh_out["secret"] = None
         if osecret and not _keyring_set("webhook_outbound_secret", osecret):
             logger.warning("Keyring unavailable; outbound webhook secret not written to disk.")
+
+        remote = cfg.setdefault("remote", {})
+        rsecret = remote.get("secret")
+        remote["secret"] = None
+        if rsecret and not _keyring_set("remote_secret", rsecret):
+            logger.warning("Keyring unavailable; remote pairing secret not written to disk.")
 
         gitcfg = cfg.setdefault("git", {})
         gtoken = gitcfg.get("token")

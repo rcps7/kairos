@@ -112,6 +112,9 @@ class KairosEngine:
         self.webhook = None
         if not headless:
             self._init_webhook()
+        self.remote = None
+        if not headless:
+            self._init_remote()
         self._loop = None
         self._thread = None
         self._retention_thread = None
@@ -540,6 +543,23 @@ class KairosEngine:
         except Exception:
             logger.exception("Failed to initialise webhook endpoint.")
             self.webhook = None
+
+    def _init_remote(self):
+        """Paired, encrypted LAN API for the Android app (kairos/remote_api.py)."""
+        cfg = self.config.get("remote", {}) or {}
+        if not cfg.get("enabled"):
+            return
+        if not cfg.get("secret"):
+            logger.warning("remote.enabled is set but no phone is paired; "
+                           "run `python -m kairos.remote_api pair`.")
+            return
+        try:
+            from kairos.remote_api import RemoteServer
+            self.remote = RemoteServer(self, cfg).start()
+            logger.info("Remote API listening on %s:%s", cfg.get("host", "0.0.0.0"), self.remote.port)
+        except Exception:
+            logger.exception("Failed to start the remote API.")
+            self.remote = None
 
     def _init_collaboration(self):
         cfg = self.config.get("collaboration", {}) or {}
@@ -1808,6 +1828,11 @@ class KairosEngine:
         except Exception:
             pass
         try:
+            if self.remote:
+                self.remote.stop()
+        except Exception:
+            pass
+        try:
             from kairos import browser as _browser
             _browser.session_close()
         except Exception:
@@ -1876,11 +1901,13 @@ def fallback_models(provider_id: str, provider: dict = None) -> list:
     provider = provider or {}
     models = list(_FALLBACK_MODELS.get(provider_id, []))
     url = (provider.get("api_url") or "").lower()
-    for preset in LLM_PRESETS:
-        if preset["api_url"].lower() in url or url in preset["api_url"].lower():
-            for m in _FALLBACK_MODELS.get(preset["id"], []):
-                if m not in models:
-                    models.append(m)
+    if url:
+        for preset in LLM_PRESETS:
+            purl = preset["api_url"].lower()
+            if purl in url or url in purl:
+                for m in _FALLBACK_MODELS.get(preset["id"], []):
+                    if m not in models:
+                        models.append(m)
     cur = provider.get("model")
     if cur and cur not in models:
         models.insert(0, cur)

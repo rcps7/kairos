@@ -750,7 +750,7 @@ class SkillDialog(QDialog):
 
     def refresh_status_bar(self):
         parent = self.parent()
-        if isinstance(parent, KairosGUI):
+        if hasattr(parent, "refresh_status_bar"):
             parent.refresh_status_bar()
 
 
