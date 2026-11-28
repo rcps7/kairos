@@ -180,7 +180,14 @@ class BrowserAgent(private val page: () -> BrowserPage, private val shotsDir: Fi
     }
     suspend fun forms(): String = page().eval(BrowserScripts.forms())
     suspend fun fill(target: String, value: String): String = page().eval(BrowserScripts.fill(target, value))
-    suspend fun form(fields: Map<String, String>): String = fields.entries.joinToString("\n") { (k, v) -> "$k: " + fill(k, v) }
+    suspend fun form(fields: Map<String, String>): String {
+        val out = StringBuilder()
+        for ((k, v) in fields.entries) {
+            if (out.isNotEmpty()) out.append('\n')
+            out.append(k).append(": ").append(fill(k, v))
+        }
+        return out.toString()
+    }
     suspend fun click(target: String): String {
         val r = page().eval(BrowserScripts.click(target)); page().settle(); return "$r\nNow at: ${page().url}"
     }
